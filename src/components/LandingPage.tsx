@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowUpRight, Check, Briefcase, Layers, Send, Star, User, Sparkles, AlertCircle, Quote, Phone, MessageSquare, Mail } from 'lucide-react';
 // @ts-ignore
-import webdotLogo from '../assets/images/web.jpg';
+import webdotLogo from '../assets/images/web.png';
 import { Project, Testimonial, Inquiry } from '../types';
 import { resolveProjectImage } from '../utils/imageResolver';
 
