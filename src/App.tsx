@@ -105,16 +105,135 @@ export default function App() {
     addLog(`SECURITY_ALERT: Admin session manually locked and deauthorized. Entry links hidden.`);
   };
 
+  const [isServerOnline, setIsServerOnline] = useState(true);
+
+  // Client-side statistics fallback calculator for environments like Vercel (static deployment)
+  const calculateStatsLocally = React.useCallback((
+    currentProjects: Project[],
+    currentTestimonials: Testimonial[],
+    currentInquiries: Inquiry[]
+  ) => {
+    const totalLeads = currentInquiries.length;
+    const activeProjects = currentProjects.filter(p => p.status === 'published').length;
+    const approvedReviews = currentTestimonials.filter(t => t.status === 'approved').length;
+    const totalVisitors = Number(localStorage.getItem('webdot_visitors')) || 1420;
+
+    const localPerformance = (() => {
+      try {
+        const perf = localStorage.getItem('webdot_performance');
+        return perf ? JSON.parse(perf) : {
+          traffic: [1200, 1280, 1310, 1390, 1405, 1412, totalVisitors],
+          leads: [12, 14, 18, 15, 22, 24, totalLeads]
+        };
+      } catch {
+        return {
+          traffic: [1200, 1280, 1310, 1390, 1405, 1412, totalVisitors],
+          leads: [12, 14, 18, 15, 22, 24, totalLeads]
+        };
+      }
+    })();
+
+    // Dynamically align today's index in sparkline charts
+    const today = new Date().getDay();
+    const index = today === 0 ? 6 : today - 1;
+    localPerformance.traffic[index] = Math.max(localPerformance.traffic[index] || 0, totalVisitors);
+    localPerformance.leads[index] = Math.max(localPerformance.leads[index] || 0, totalLeads);
+    localStorage.setItem('webdot_performance', JSON.stringify(localPerformance));
+
+    const localStats: StatItem[] = [
+      {
+        id: 'leads',
+        label: 'Total Leads',
+        value: totalLeads.toLocaleString(),
+        change: '+12% ↑',
+        status: 'growth',
+        icon: 'person_add',
+        sparkline: localPerformance.leads
+      },
+      {
+        id: 'projects',
+        label: 'Active Projects',
+        value: activeProjects.toString(),
+        change: 'Stable',
+        status: 'stable',
+        icon: 'rocket_launch',
+        sparkline: [10, 18, 10, 15, 5, 12, activeProjects]
+      },
+      {
+        id: 'visitors',
+        label: 'Website Visitors',
+        value: totalVisitors >= 1000 ? (totalVisitors / 1000).toFixed(1) + 'k' : totalVisitors.toString(),
+        change: '+4% ↑',
+        status: 'growth',
+        icon: 'visibility',
+        sparkline: localPerformance.traffic
+      },
+      {
+        id: 'reviews',
+        label: 'Approved Reviews',
+        value: approvedReviews.toString(),
+        change: '+85%',
+        status: 'growth',
+        icon: 'thumb_up',
+        sparkline: [5, 15, 5, 10, 12, 8, approvedReviews]
+      }
+    ];
+
+    setStats(localStats);
+    localStorage.setItem('webdot_stats', JSON.stringify(localStats));
+  }, []);
+
+  // Sync state modifications to LocalStorage for full persistence in offline/static environments
+  React.useEffect(() => {
+    localStorage.setItem('webdot_projects', JSON.stringify(projects));
+    if (!isServerOnline) {
+      calculateStatsLocally(projects, testimonials, inquiries);
+    }
+  }, [projects, isServerOnline, calculateStatsLocally]);
+
+  React.useEffect(() => {
+    localStorage.setItem('webdot_testimonials', JSON.stringify(testimonials));
+    if (!isServerOnline) {
+      calculateStatsLocally(projects, testimonials, inquiries);
+    }
+  }, [testimonials, isServerOnline, calculateStatsLocally]);
+
+  React.useEffect(() => {
+    localStorage.setItem('webdot_inquiries', JSON.stringify(inquiries));
+    if (!isServerOnline) {
+      calculateStatsLocally(projects, testimonials, inquiries);
+    }
+  }, [inquiries, isServerOnline, calculateStatsLocally]);
+
+  React.useEffect(() => {
+    localStorage.setItem('webdot_stats', JSON.stringify(stats));
+  }, [stats]);
+
   // Ping server on initial load to register real-time visitor hit
   React.useEffect(() => {
     fetch('/api/visitors/ping', { method: 'POST' })
-      .catch(err => console.warn('Visitor ping offline, using local metrics:', err));
+      .then(res => {
+        if (!res.ok) throw new Error('Not OK');
+        return res.json();
+      })
+      .then(data => {
+        if (data.success && data.visitors) {
+          localStorage.setItem('webdot_visitors', String(data.visitors));
+        }
+      })
+      .catch(err => {
+        console.warn('Visitor ping offline, using local metrics:', err);
+        const current = Number(localStorage.getItem('webdot_visitors')) || 1420;
+        const next = current + 1;
+        localStorage.setItem('webdot_visitors', String(next));
+      });
   }, []);
 
   // Sync data function that queries the live Express backend server
   const fetchLiveServerData = React.useCallback(async (isSilent = false) => {
     try {
       const statsRes = await fetch('/api/dashboard/stats');
+      if (!statsRes.ok) throw new Error('API server unreachable');
       const statsData = await statsRes.json();
       if (statsData.success) {
         setStats(statsData.stats);
@@ -122,6 +241,7 @@ export default function App() {
       }
 
       const projectsRes = await fetch('/api/projects');
+      if (!projectsRes.ok) throw new Error('API server unreachable');
       const projectsData = await projectsRes.json();
       if (projectsData.success) {
         setProjects(projectsData.projects);
@@ -129,6 +249,7 @@ export default function App() {
       }
 
       const inquiriesRes = await fetch('/api/inquiries');
+      if (!inquiriesRes.ok) throw new Error('API server unreachable');
       const inquiriesData = await inquiriesRes.json();
       if (inquiriesData.success) {
         setInquiries(inquiriesData.inquiries);
@@ -136,22 +257,26 @@ export default function App() {
       }
 
       const testimonialsRes = await fetch('/api/testimonials');
+      if (!testimonialsRes.ok) throw new Error('API server unreachable');
       const testimonialsData = await testimonialsRes.json();
       if (testimonialsData.success) {
         setTestimonials(testimonialsData.testimonials);
         localStorage.setItem('webdot_testimonials', JSON.stringify(testimonialsData.testimonials));
       }
 
+      setIsServerOnline(true);
       if (!isSilent) {
         addLog(`SYNC_COMPLETE: Live real-time dashboard data stream pulled from Express backend.`);
       }
     } catch (error) {
+      setIsServerOnline(false);
+      calculateStatsLocally(projects, testimonials, inquiries);
       if (!isSilent) {
         console.warn('Backend server APIs are unavailable. Cascading to local storage state.', error);
         addLog(`SYNC_WARNING: Real-time backend server unreachable. Cascaded to LocalStorage state.`);
       }
     }
-  }, []);
+  }, [projects, testimonials, inquiries, calculateStatsLocally]);
 
   // Perform initial fetch on mount and setup polling
   React.useEffect(() => {
@@ -400,22 +525,13 @@ export default function App() {
       date: new Date().toISOString().split('T')[0]
     };
 
-    setInquiries(prev => [mockInquiry, ...prev]);
+    // Update visitors locally
+    const currentVisitors = Number(localStorage.getItem('webdot_visitors')) || 1420;
+    const extraVisitors = Math.floor(Math.random() * 85) + 15;
+    localStorage.setItem('webdot_visitors', String(currentVisitors + extraVisitors));
 
-    setStats(prev => prev.map(s => {
-      const currentVal = Number(s.value.replace(/,/g, ''));
-      if (s.id === 'leads') {
-        const newVal = currentVal + 1;
-        const nextSpark = [...s.sparkline.slice(1), Math.floor(Math.random() * 15) + 5];
-        return { ...s, value: newVal.toLocaleString(), sparkline: nextSpark, change: '+14% ↑' };
-      }
-      if (s.id === 'visitors') {
-        const newVal = currentVal + Math.floor(Math.random() * 85) + 15;
-        const nextSpark = [...s.sparkline.slice(1), Math.floor(Math.random() * 15) + 5];
-        return { ...s, value: newVal.toLocaleString(), sparkline: nextSpark, change: '+18% ↑' };
-      }
-      return s;
-    }));
+    // Append mock lead, which triggers automatic recalculation in useEffect
+    setInquiries(prev => [mockInquiry, ...prev]);
 
     addLog(`SIMULATION_TRIGGERED: Organic lead generated for '${mockInquiry.fullName}' and SEO visitor traffic spiked`);
   };
