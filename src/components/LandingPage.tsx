@@ -846,7 +846,13 @@ export default function LandingPage({
             <div className="flex flex-col items-center space-y-3">
               <div className="w-14 h-14 bg-white rounded-2xl overflow-hidden flex items-center justify-center p-1 shadow-xl shadow-primary/15 border border-white/10 hover:scale-105 transition-transform duration-300">
                 <img 
-                  src={webdotLogo} 
+                  src={webdotLogo || "/web.png"} 
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (target.src !== window.location.origin + "/web.png") {
+                      target.src = "/web.png";
+                    }
+                  }}
                   alt="WEBDot Logo" 
                   className="w-full h-full object-contain select-none pointer-events-none" 
                 />

@@ -20,7 +20,13 @@ export default function Navbar({ currentView, onNavigate, onBookConsultation, is
         >
           <div className="w-8 h-8 sm:w-9 sm:h-9 bg-white rounded-xl overflow-hidden flex items-center justify-center p-0.5 shadow-lg shadow-primary/15 group-hover:scale-105 transition-all duration-300 border border-white/10">
             <img 
-              src={webdotLogo} 
+              src={webdotLogo || "/web.png"} 
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (target.src !== window.location.origin + "/web.png") {
+                  target.src = "/web.png";
+                }
+              }}
               alt="WEBDot Logo" 
               className="w-full h-full object-contain select-none pointer-events-none"
               referrerPolicy="no-referrer"
