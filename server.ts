@@ -1,9 +1,20 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { initializeApp } from "firebase/app";
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  deleteDoc, 
+  query, 
+  limit 
+} from "firebase/firestore";
 import { initialProjects, initialTestimonials, initialInquiries } from "./src/initialData";
 
 dotenv.config();
@@ -13,64 +24,179 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Persistent Local Data Store file path
-const DATA_STORE_PATH = path.join(process.cwd(), "webdot_data_store.json");
+// Load custom Firebase applet configuration with robust environment and default fallback
+let firebaseConfig: any;
+const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
+if (fs.existsSync(firebaseConfigPath)) {
+  try {
+    firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf8"));
+  } catch (err) {
+    console.warn("Failed to parse firebase-applet-config.json:", err);
+  }
+}
 
-interface DataStore {
-  projects: any[];
-  testimonials: any[];
-  inquiries: any[];
-  visitors: number;
-  weeklyPerformance: {
-    traffic: number[];
-    leads: number[];
+if (!firebaseConfig) {
+  firebaseConfig = {
+    apiKey: process.env.FIREBASE_API_KEY || process.env.VITE_FIREBASE_API_KEY || "AIzaSyDAyubgdUSv1LB7bPoLyp1_SF8lMdhokpw",
+    authDomain: process.env.FIREBASE_AUTH_DOMAIN || process.env.VITE_FIREBASE_AUTH_DOMAIN || "gen-lang-client-0924323899.firebaseapp.com",
+    projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0924323899",
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET || process.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0924323899.firebasestorage.app",
+    messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "905605910102",
+    appId: process.env.FIREBASE_APP_ID || process.env.VITE_FIREBASE_APP_ID || "1:905605910102:web:d9f0afcbffed5682ff75f7"
   };
 }
 
-let store: DataStore = {
-  projects: [],
-  testimonials: [],
-  inquiries: [],
-  visitors: 8420,
-  weeklyPerformance: {
-    traffic: [180, 100, 150, 50, 120, 80, 150],
-    leads: [15, 5, 12, 8, 15, 5, 10]
+// Initialize Firebase App via Web SDK to authenticate using the API key via Web APIs.
+// This resolves the cross-project PERMISSION_DENIED issue of the Admin SDK.
+const firebaseApp = initializeApp(firebaseConfig);
+const clientDb = getFirestore(firebaseApp, "ai-studio-webdotagency-be7610f7-4b4d-40fb-95db-239c2619d8da");
+
+// Client compatibility layer that implements the firebase-admin / Firestore collection-chaining style APIs used in routes
+class CompatDocRef {
+  constructor(private colPath: string, private docId: string) {}
+
+  async get() {
+    const d = doc(clientDb, this.colPath, this.docId);
+    const snap = await getDoc(d);
+    return {
+      exists: snap.exists(),
+      data: () => snap.data()
+    };
+  }
+
+  async set(data: any, options?: { merge?: boolean }) {
+    const d = doc(clientDb, this.colPath, this.docId);
+    if (options?.merge) {
+      await setDoc(d, data, { merge: true });
+    } else {
+      await setDoc(d, data);
+    }
+  }
+
+  async delete() {
+    const d = doc(clientDb, this.colPath, this.docId);
+    await deleteDoc(d);
+  }
+}
+
+class CompatQuery {
+  constructor(private colPath: string, private limitCount?: number) {}
+
+  async get() {
+    const q = collection(clientDb, this.colPath);
+    if (this.limitCount !== undefined) {
+      const snap = await getDocs(query(q, limit(this.limitCount)));
+      return this.wrapSnapshot(snap);
+    } else {
+      const snap = await getDocs(q);
+      return this.wrapSnapshot(snap);
+    }
+  }
+
+  private wrapSnapshot(snap: any) {
+    return {
+      empty: snap.empty,
+      size: snap.size,
+      docs: snap.docs.map((d: any) => ({
+        id: d.id,
+        exists: d.exists(),
+        data: () => d.data()
+      }))
+    };
+  }
+}
+
+class CompatCollection {
+  constructor(private colPath: string) {}
+
+  doc(docId: string) {
+    return new CompatDocRef(this.colPath, docId);
+  }
+
+  limit(n: number) {
+    return new CompatQuery(this.colPath, n);
+  }
+
+  async get() {
+    return new CompatQuery(this.colPath).get();
+  }
+}
+
+const db = {
+  collection(colPath: string) {
+    return new CompatCollection(colPath);
   }
 };
 
-function loadStore() {
+// Helper to check and seed the database with initial template data
+async function seedDatabaseIfNeeded() {
   try {
-    if (fs.existsSync(DATA_STORE_PATH)) {
-      const content = fs.readFileSync(DATA_STORE_PATH, "utf-8");
-      store = JSON.parse(content);
-    } else {
-      store = {
-        projects: initialProjects,
-        testimonials: initialTestimonials,
-        inquiries: initialInquiries,
+    const projectsSnapshot = await db.collection("projects").limit(1).get();
+    if (projectsSnapshot.empty) {
+      console.log("Firestore database is empty. Seeding initial agency data...");
+
+      // Seed projects
+      for (const proj of initialProjects) {
+        await db.collection("projects").doc(proj.id).set(proj);
+      }
+
+      // Seed testimonials
+      for (const test of initialTestimonials) {
+        await db.collection("testimonials").doc(test.id).set(test);
+      }
+
+      // Seed inquiries
+      for (const inq of initialInquiries) {
+        await db.collection("inquiries").doc(inq.id).set(inq);
+      }
+
+      // Seed metrics
+      await db.collection("metrics").doc("dashboard").set({
         visitors: 8420,
         weeklyPerformance: {
           traffic: [180, 100, 150, 50, 120, 80, 150],
           leads: [15, 5, 12, 8, 15, 5, 10]
         }
-      };
-      saveStore();
+      });
+
+      console.log("Firestore database successfully seeded with case studies and metrics!");
+    } else {
+      console.log("Firestore database contains existing records. Seeding skipped.");
     }
   } catch (error) {
-    console.error("Failed to load data store, using in-memory fallbacks:", error);
+    console.error("Failed to seed Firestore:", error);
   }
 }
 
-function saveStore() {
+// Trigger initial Firestore database seeding
+seedDatabaseIfNeeded();
+
+// Helper functions for Firestore metrics access
+async function getDashboardMetrics() {
   try {
-    fs.writeFileSync(DATA_STORE_PATH, JSON.stringify(store, null, 2), "utf-8");
+    const doc = await db.collection("metrics").doc("dashboard").get();
+    if (doc.exists) {
+      return doc.data() as any;
+    }
   } catch (error) {
-    console.error("Failed to save data store:", error);
+    console.error("Error fetching metrics from Firestore:", error);
   }
+  return {
+    visitors: 8420,
+    weeklyPerformance: {
+      traffic: [180, 100, 150, 50, 120, 80, 150],
+      leads: [15, 5, 12, 8, 15, 5, 10]
+    }
+  };
 }
 
-// Initial storage load on server start
-loadStore();
+async function updateDashboardMetrics(data: any) {
+  try {
+    await db.collection("metrics").doc("dashboard").set(data, { merge: true });
+  } catch (error) {
+    console.error("Error updating metrics in Firestore:", error);
+  }
+}
 
 // API route to scan and calculate website cost
 app.post("/api/calculate-cost", async (req, res) => {
@@ -260,262 +386,305 @@ Return a structured pricing estimation breakdown in JSON format.`;
 // ==========================================
 
 // GET dashboard statistics (calculated dynamically based on real data in storage)
-app.get("/api/dashboard/stats", (req, res) => {
-  loadStore();
-  
-  const totalLeads = store.inquiries.length;
-  const activeProjects = store.projects.filter(p => p.status === 'published').length;
-  const approvedReviews = store.testimonials.filter(t => t.status === 'approved').length;
-  const totalVisitors = store.visitors;
+app.get("/api/dashboard/stats", async (req, res) => {
+  try {
+    const inquiriesSnap = await db.collection("inquiries").get();
+    const projectsSnap = await db.collection("projects").get();
+    const testimonialsSnap = await db.collection("testimonials").get();
+    const metrics = await getDashboardMetrics();
 
-  const stats = [
-    {
-      id: 'leads',
-      label: 'Total Leads',
-      value: totalLeads.toLocaleString(),
-      change: '+12% ↑',
-      status: 'growth',
-      icon: 'person_add',
-      sparkline: store.weeklyPerformance.leads
-    },
-    {
-      id: 'projects',
-      label: 'Active Projects',
-      value: activeProjects.toString(),
-      change: 'Stable',
-      status: 'stable',
-      icon: 'rocket_launch',
-      sparkline: [10, 18, 10, 15, 5, 12, activeProjects]
-    },
-    {
-      id: 'visitors',
-      label: 'Website Visitors',
-      value: totalVisitors >= 1000 ? (totalVisitors / 1000).toFixed(1) + 'k' : totalVisitors.toString(),
-      change: '+4% ↑',
-      status: 'growth',
-      icon: 'visibility',
-      sparkline: store.weeklyPerformance.traffic
-    },
-    {
-      id: 'reviews',
-      label: 'Approved Reviews',
-      value: approvedReviews.toString(),
-      change: '+85%',
-      status: 'growth',
-      icon: 'thumb_up',
-      sparkline: [5, 15, 5, 10, 12, 8, approvedReviews]
-    }
-  ];
-  
-  res.json({ success: true, stats });
+    const totalLeads = inquiriesSnap.size;
+    const activeProjects = projectsSnap.docs.filter(doc => doc.data().status === 'published').length;
+    const approvedReviews = testimonialsSnap.docs.filter(doc => doc.data().status === 'approved').length;
+    const totalVisitors = metrics.visitors;
+
+    const stats = [
+      {
+        id: 'leads',
+        label: 'Total Leads',
+        value: totalLeads.toLocaleString(),
+        change: '+12% ↑',
+        status: 'growth',
+        icon: 'person_add',
+        sparkline: metrics.weeklyPerformance.leads
+      },
+      {
+        id: 'projects',
+        label: 'Active Projects',
+        value: activeProjects.toString(),
+        change: 'Stable',
+        status: 'stable',
+        icon: 'rocket_launch',
+        sparkline: [10, 18, 10, 15, 5, 12, activeProjects]
+      },
+      {
+        id: 'visitors',
+        label: 'Website Visitors',
+        value: totalVisitors >= 1000 ? (totalVisitors / 1000).toFixed(1) + 'k' : totalVisitors.toString(),
+        change: '+4% ↑',
+        status: 'growth',
+        icon: 'visibility',
+        sparkline: metrics.weeklyPerformance.traffic
+      },
+      {
+        id: 'reviews',
+        label: 'Approved Reviews',
+        value: approvedReviews.toString(),
+        change: '+85%',
+        status: 'growth',
+        icon: 'thumb_up',
+        sparkline: [5, 15, 5, 10, 12, 8, approvedReviews]
+      }
+    ];
+
+    res.json({ success: true, stats });
+  } catch (error: any) {
+    console.error("Failed to compile dashboard stats:", error);
+    res.status(500).json({ error: error.message || "Database fetch error" });
+  }
 });
 
 // GET real-time weekly strategic performance
-app.get("/api/dashboard/performance", (req, res) => {
-  loadStore();
-  res.json({
-    success: true,
-    performance: {
-      traffic: store.weeklyPerformance.traffic,
-      leads: store.weeklyPerformance.leads
-    }
-  });
+app.get("/api/dashboard/performance", async (req, res) => {
+  try {
+    const metrics = await getDashboardMetrics();
+    res.json({
+      success: true,
+      performance: {
+        traffic: metrics.weeklyPerformance.traffic,
+        leads: metrics.weeklyPerformance.leads
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST real-time visitor page hit (ping)
-app.post("/api/visitors/ping", (req, res) => {
-  loadStore();
-  store.visitors += 1;
-  
-  // Track this hit on current day of week (MON to SUN)
-  const today = new Date().getDay(); // 0 is Sun, 1 is Mon, ...
-  const index = today === 0 ? 6 : today - 1;
-  store.weeklyPerformance.traffic[index] = (store.weeklyPerformance.traffic[index] || 0) + 1;
-  
-  saveStore();
-  res.json({ success: true, visitors: store.visitors });
+app.post("/api/visitors/ping", async (req, res) => {
+  try {
+    const metrics = await getDashboardMetrics();
+    metrics.visitors += 1;
+
+    // Track this hit on current day of week (MON to SUN)
+    const today = new Date().getDay(); // 0 is Sun, 1 is Mon, ...
+    const index = today === 0 ? 6 : today - 1;
+    metrics.weeklyPerformance.traffic[index] = (metrics.weeklyPerformance.traffic[index] || 0) + 1;
+
+    await updateDashboardMetrics(metrics);
+    res.json({ success: true, visitors: metrics.visitors });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // POST simulate mock traffic/leads in real-time
-app.post("/api/dashboard/simulate-traffic", (req, res) => {
-  loadStore();
-  
-  const mockNames = ['Arthur Dent', 'Ford Prefect', 'Tricia McMillan', 'Zaphod Beeblebrox', 'Marvin Android'];
-  const mockEmails = ['arthur@heartofgold.net', 'ford@guide.galaxy', 'trillian@sub-ether.org', 'zaphod@president.galaxy', 'marvin@paranoid.com'];
-  const mockServices = ['Website Development', 'AI Automation', 'Enterprise Dashboard', 'E-Commerce Ecosystem'];
-  const mockMessages = [
-    'We require an interstellar booking client with real-time tachyon state management.',
-    'Requesting an automated semantic catalog generator integrated with high-performance edge assets.',
-    'Our luxury logistics routing requires custom visualizers matching our retro styling paradigm.',
-    'Can you optimize our product checkout systems for mobile-first luxury and low-bandwidth systems?',
-    'I have been requested to optimize our support queues, but it will probably be incredibly tedious.'
-  ];
+app.post("/api/dashboard/simulate-traffic", async (req, res) => {
+  try {
+    const mockNames = ['Arthur Dent', 'Ford Prefect', 'Tricia McMillan', 'Zaphod Beeblebrox', 'Marvin Android'];
+    const mockEmails = ['arthur@heartofgold.net', 'ford@guide.galaxy', 'trillian@sub-ether.org', 'zaphod@president.galaxy', 'marvin@paranoid.com'];
+    const mockServices = ['Website Development', 'AI Automation', 'Enterprise Dashboard', 'E-Commerce Ecosystem'];
+    const mockMessages = [
+      'We require an interstellar booking client with real-time tachyon state management.',
+      'Requesting an automated semantic catalog generator integrated with high-performance edge assets.',
+      'Our luxury logistics routing requires custom visualizers matching our retro styling paradigm.',
+      'Can you optimize our product checkout systems for mobile-first luxury and low-bandwidth systems?',
+      'I have been requested to optimize our support queues, but it will probably be incredibly tedious.'
+    ];
 
-  const randomIndex = Math.floor(Math.random() * mockNames.length);
-  const newInq = {
-    id: `inq-mock-${Date.now()}`,
-    fullName: mockNames[randomIndex],
-    email: mockEmails[randomIndex],
-    service: mockServices[Math.floor(Math.random() * mockServices.length)],
-    message: mockMessages[randomIndex],
-    date: new Date().toISOString().split('T')[0]
-  };
+    const randomIndex = Math.floor(Math.random() * mockNames.length);
+    const newInq = {
+      id: `inq-mock-${Date.now()}`,
+      fullName: mockNames[randomIndex],
+      email: mockEmails[randomIndex],
+      service: mockServices[Math.floor(Math.random() * mockServices.length)],
+      message: mockMessages[randomIndex],
+      date: new Date().toISOString().split('T')[0]
+    };
 
-  store.inquiries.unshift(newInq);
-  store.visitors += Math.floor(Math.random() * 85) + 15;
-  
-  // Increment active leads counts for today
-  const today = new Date().getDay();
-  const index = today === 0 ? 6 : today - 1;
-  store.weeklyPerformance.leads[index] = (store.weeklyPerformance.leads[index] || 0) + 1;
-  store.weeklyPerformance.traffic[index] = (store.weeklyPerformance.traffic[index] || 0) + 15;
-  
-  saveStore();
-  res.json({ success: true, inquiry: newInq, visitors: store.visitors });
+    // Save newly generated inquiry to Firestore
+    await db.collection("inquiries").doc(newInq.id).set(newInq);
+
+    const metrics = await getDashboardMetrics();
+    metrics.visitors += Math.floor(Math.random() * 85) + 15;
+
+    // Increment active leads counts for today
+    const today = new Date().getDay();
+    const index = today === 0 ? 6 : today - 1;
+    metrics.weeklyPerformance.leads[index] = (metrics.weeklyPerformance.leads[index] || 0) + 1;
+    metrics.weeklyPerformance.traffic[index] = (metrics.weeklyPerformance.traffic[index] || 0) + 15;
+
+    await updateDashboardMetrics(metrics);
+    res.json({ success: true, inquiry: newInq, visitors: metrics.visitors });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // INQUIRIES ENDPOINTS (Leads)
-app.get("/api/inquiries", (req, res) => {
-  loadStore();
-  res.json({ success: true, inquiries: store.inquiries });
-});
-
-app.post("/api/inquiries", (req, res) => {
-  loadStore();
-  const { fullName, email, service, message } = req.body;
-  if (!fullName || !email) {
-    return res.status(400).json({ error: "Name and email are required" });
+app.get("/api/inquiries", async (req, res) => {
+  try {
+    const snap = await db.collection("inquiries").get();
+    const inquiries = snap.docs.map(doc => doc.data());
+    // Sort descending by id/date timestamp
+    inquiries.sort((a: any, b: any) => b.id.localeCompare(a.id));
+    res.json({ success: true, inquiries });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
-
-  const newInq = {
-    id: `inq-${Date.now()}`,
-    fullName,
-    email,
-    service: service || "General Consultation",
-    message: message || "",
-    date: new Date().toISOString().split('T')[0]
-  };
-
-  store.inquiries.unshift(newInq);
-  
-  const today = new Date().getDay();
-  const index = today === 0 ? 6 : today - 1;
-  store.weeklyPerformance.leads[index] = (store.weeklyPerformance.leads[index] || 0) + 1;
-
-  saveStore();
-  res.json({ success: true, inquiry: newInq });
 });
 
-app.delete("/api/inquiries/:id", (req, res) => {
-  loadStore();
-  const { id } = req.params;
-  store.inquiries = store.inquiries.filter(i => i.id !== id);
-  saveStore();
-  res.json({ success: true });
+app.post("/api/inquiries", async (req, res) => {
+  try {
+    const { fullName, email, service, message } = req.body;
+    if (!fullName || !email) {
+      return res.status(400).json({ error: "Name and email are required" });
+    }
+
+    const newInq = {
+      id: `inq-${Date.now()}`,
+      fullName,
+      email,
+      service: service || "General Consultation",
+      message: message || "",
+      date: new Date().toISOString().split('T')[0]
+    };
+
+    await db.collection("inquiries").doc(newInq.id).set(newInq);
+
+    const metrics = await getDashboardMetrics();
+    const today = new Date().getDay();
+    const index = today === 0 ? 6 : today - 1;
+    metrics.weeklyPerformance.leads[index] = (metrics.weeklyPerformance.leads[index] || 0) + 1;
+
+    await updateDashboardMetrics(metrics);
+    res.json({ success: true, inquiry: newInq });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/inquiries/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.collection("inquiries").doc(id).delete();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // PROJECTS ENDPOINTS (Case Studies)
-app.get("/api/projects", (req, res) => {
-  loadStore();
-  res.json({ success: true, projects: store.projects });
-});
-
-app.post("/api/projects", (req, res) => {
-  loadStore();
-  const newProj = req.body;
-  if (!newProj.name || !newProj.client) {
-    return res.status(400).json({ error: "Name and client are required" });
+app.get("/api/projects", async (req, res) => {
+  try {
+    const snap = await db.collection("projects").get();
+    const projects = snap.docs.map(doc => doc.data());
+    projects.sort((a: any, b: any) => b.id.localeCompare(a.id));
+    res.json({ success: true, projects });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
-
-  const project = {
-    ...newProj,
-    id: newProj.id || `proj-${Date.now()}`,
-    status: newProj.status || "draft",
-    lastUpdated: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
-  };
-
-  store.projects.unshift(project);
-  saveStore();
-  res.json({ success: true, project });
 });
 
-app.put("/api/projects/:id", (req, res) => {
-  loadStore();
-  const { id } = req.params;
-  const updates = req.body;
-
-  store.projects = store.projects.map(p => {
-    if (p.id === id) {
-      return { ...p, ...updates };
+app.post("/api/projects", async (req, res) => {
+  try {
+    const newProj = req.body;
+    if (!newProj.name || !newProj.client) {
+      return res.status(400).json({ error: "Name and client are required" });
     }
-    return p;
-  });
 
-  saveStore();
-  res.json({ success: true });
+    const project = {
+      ...newProj,
+      id: newProj.id || `proj-${Date.now()}`,
+      status: newProj.status || "draft",
+      lastUpdated: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })
+    };
+
+    await db.collection("projects").doc(project.id).set(project);
+    res.json({ success: true, project });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.delete("/api/projects/:id", (req, res) => {
-  loadStore();
-  const { id } = req.params;
-  store.projects = store.projects.filter(p => p.id !== id);
-  saveStore();
-  res.json({ success: true });
+app.put("/api/projects/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    await db.collection("projects").doc(id).set(updates, { merge: true });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/projects/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.collection("projects").doc(id).delete();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // TESTIMONIALS ENDPOINTS (Reviews)
-app.get("/api/testimonials", (req, res) => {
-  loadStore();
-  res.json({ success: true, testimonials: store.testimonials });
-});
-
-app.post("/api/testimonials", (req, res) => {
-  loadStore();
-  const { name, company, text } = req.body;
-  if (!name || !text) {
-    return res.status(400).json({ error: "Name and text are required" });
+app.get("/api/testimonials", async (req, res) => {
+  try {
+    const snap = await db.collection("testimonials").get();
+    const testimonials = snap.docs.map(doc => doc.data());
+    testimonials.sort((a: any, b: any) => b.id.localeCompare(a.id));
+    res.json({ success: true, testimonials });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
-
-  const initials = name
-    .split(' ')
-    .map((n: string) => n[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2);
-
-  const newTest = {
-    id: `test-${Date.now()}`,
-    name,
-    company: company || "Independent",
-    text,
-    initials: initials || "CL",
-    status: "pending"
-  };
-
-  store.testimonials.unshift(newTest);
-  saveStore();
-  res.json({ success: true, testimonial: newTest });
 });
 
-app.put("/api/testimonials/:id", (req, res) => {
-  loadStore();
-  const { id } = req.params;
-  const { status } = req.body;
-
-  store.testimonials = store.testimonials.map(t => {
-    if (t.id === id) {
-      return { ...t, status };
+app.post("/api/testimonials", async (req, res) => {
+  try {
+    const { name, company, text } = req.body;
+    if (!name || !text) {
+      return res.status(400).json({ error: "Name and text are required" });
     }
-    return t;
-  });
 
-  saveStore();
-  res.json({ success: true });
+    const initials = name
+      .split(' ')
+      .map((n: string) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+
+    const newTest = {
+      id: `test-${Date.now()}`,
+      name,
+      company: company || "Independent",
+      text,
+      initials: initials || "CL",
+      status: "pending"
+    };
+
+    await db.collection("testimonials").doc(newTest.id).set(newTest);
+    res.json({ success: true, testimonial: newTest });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/testimonials/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    await db.collection("testimonials").doc(id).set({ status }, { merge: true });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Vite middleware for development
 async function setupVite() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -534,4 +703,8 @@ async function setupVite() {
   });
 }
 
-setupVite();
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  setupVite();
+}
+
+export default app;

@@ -1,0 +1,57 @@
+{
+  "collections": [
+    {
+      "collectionId": "projects",
+      "description": "Premium client case studies, digital platforms, and active web development projects.",
+      "fields": {
+        "id": "String (unique identifier, e.g. skyline-properties)",
+        "name": "String (name of the project)",
+        "client": "String (client brand name)",
+        "description": "String (short description)",
+        "industry": "String (e.g. Luxury Real Estate)",
+        "role": "String (role played, e.g. Design, Fullstack Dev)",
+        "timeline": "String (e.g. 6 Months)",
+        "tags": "Array of Strings",
+        "liveUrl": "String (optional URL)",
+        "image": "String (source URL of hero image)",
+        "status": "String (published | draft)",
+        "lastUpdated": "String (formatted date, e.g. Oct 24, 2023)",
+        "results": "Array of Objects ({ value, label, colorClass })",
+        "details": "Object containing detailed challenge, solution, technologyStack, screenshots, and testimonial"
+      }
+    },
+    {
+      "collectionId": "testimonials",
+      "description": "Client reviews and feedback on WEBDot digital agency services.",
+      "fields": {
+        "id": "String (unique testimonial ID)",
+        "name": "String (reviewer full name)",
+        "company": "String (reviewer corporate affiliation)",
+        "text": "String (testimonial body quote)",
+        "initials": "String (initials e.g. JV)",
+        "status": "String (pending | approved)"
+      }
+    },
+    {
+      "collectionId": "inquiries",
+      "description": "Customer leads, project consultation briefs, and contact requests generated from the website.",
+      "fields": {
+        "id": "String (unique lead/inquiry ID)",
+        "fullName": "String (visitor full name)",
+        "email": "String (visitor email address)",
+        "service": "String (selected service, e.g. Website Development)",
+        "message": "String (brief message describing their goals)",
+        "date": "String (formatted ISO date, YYYY-MM-DD)"
+      }
+    },
+    {
+      "collectionId": "metrics",
+      "description": "Real-time web traffic statistics and lead tracking weekly performance charts.",
+      "fields": {
+        "id": "String (document ID, e.g. dashboard)",
+        "visitors": "Number (total accumulated web visitors count)",
+        "weeklyPerformance": "Object with traffic (Array of 7 Numbers) and leads (Array of 7 Numbers)"
+      }
+    }
+  ]
+}

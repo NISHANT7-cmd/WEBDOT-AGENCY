@@ -269,11 +269,93 @@ export default function App() {
         addLog(`SYNC_COMPLETE: Live real-time dashboard data stream pulled from Express backend.`);
       }
     } catch (error) {
-      setIsServerOnline(false);
-      calculateStatsLocally(projects, testimonials, inquiries);
-      if (!isSilent) {
-        console.warn('Backend server APIs are unavailable. Cascading to local storage state.', error);
-        addLog(`SYNC_WARNING: Real-time backend server unreachable. Cascaded to LocalStorage state.`);
+      console.warn('Backend server APIs are unavailable. Cascading to direct Cloud Firestore queries...', error);
+      
+      // Try to fetch from Firestore directly (e.g. for static Vercel deployment where Express backend is offline)
+      try {
+        const { getDocs, collection, doc, getDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+
+        const inquiriesSnap = await getDocs(collection(db, "inquiries"));
+        const fetchedInquiries = inquiriesSnap.docs.map(docSnap => docSnap.data() as Inquiry);
+        fetchedInquiries.sort((a, b) => b.id.localeCompare(a.id));
+        setInquiries(fetchedInquiries);
+        localStorage.setItem('webdot_inquiries', JSON.stringify(fetchedInquiries));
+
+        const projectsSnap = await getDocs(collection(db, "projects"));
+        const fetchedProjects = projectsSnap.docs.map(docSnap => docSnap.data() as Project);
+        fetchedProjects.sort((a, b) => b.id.localeCompare(a.id));
+        setProjects(fetchedProjects);
+        localStorage.setItem('webdot_projects', JSON.stringify(fetchedProjects));
+
+        const testimonialsSnap = await getDocs(collection(db, "testimonials"));
+        const fetchedTestimonials = testimonialsSnap.docs.map(docSnap => docSnap.data() as Testimonial);
+        fetchedTestimonials.sort((a, b) => b.id.localeCompare(a.id));
+        setTestimonials(fetchedTestimonials);
+        localStorage.setItem('webdot_testimonials', JSON.stringify(fetchedTestimonials));
+
+        // Fetch metrics
+        const metricsDoc = await getDoc(doc(db, "metrics", "dashboard"));
+        if (metricsDoc.exists()) {
+          const metrics = metricsDoc.data();
+          const totalLeads = fetchedInquiries.length;
+          const activeProjects = fetchedProjects.filter(p => p.status === 'published').length;
+          const approvedReviews = fetchedTestimonials.filter(t => t.status === 'approved').length;
+          const totalVisitors = metrics.visitors || 8420;
+          
+          const localStats = [
+            {
+              id: 'leads',
+              label: 'Total Leads',
+              value: totalLeads.toLocaleString(),
+              change: '+12% ↑',
+              status: 'growth',
+              icon: 'person_add',
+              sparkline: metrics.weeklyPerformance?.leads || [15, 5, 12, 8, 15, 5, 10]
+            },
+            {
+              id: 'projects',
+              label: 'Active Projects',
+              value: activeProjects.toString(),
+              change: 'Stable',
+              status: 'stable',
+              icon: 'rocket_launch',
+              sparkline: [10, 18, 10, 15, 5, 12, activeProjects]
+            },
+            {
+              id: 'visitors',
+              label: 'Website Visitors',
+              value: totalVisitors >= 1000 ? (totalVisitors / 1000).toFixed(1) + 'k' : totalVisitors.toString(),
+              change: '+4% ↑',
+              status: 'growth',
+              icon: 'visibility',
+              sparkline: metrics.weeklyPerformance?.traffic || [180, 100, 150, 50, 120, 80, 150]
+            },
+            {
+              id: 'reviews',
+              label: 'Approved Reviews',
+              value: approvedReviews.toString(),
+              change: '+85%',
+              status: 'growth',
+              icon: 'thumb_up',
+              sparkline: [5, 15, 5, 10, 12, 8, approvedReviews]
+            }
+          ];
+          setStats(localStats);
+          localStorage.setItem('webdot_stats', JSON.stringify(localStats));
+        }
+
+        setIsServerOnline(true); // Direct Firestore connection represents a live connected database
+        if (!isSilent) {
+          addLog(`SYNC_COMPLETE: Live data stream pulled directly from Cloud Firestore (Vercel Serverless mode).`);
+        }
+      } catch (fbError) {
+        console.error('Direct Firestore fetch failed:', fbError);
+        setIsServerOnline(false);
+        calculateStatsLocally(projects, testimonials, inquiries);
+        if (!isSilent) {
+          addLog(`SYNC_WARNING: Live server and Cloud Firestore unreachable. Cascaded to LocalStorage.`);
+        }
       }
     }
   }, [projects, testimonials, inquiries, calculateStatsLocally]);
@@ -312,16 +394,26 @@ export default function App() {
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status: nextStatus } : p));
 
     try {
-      await fetch(`/api/projects/${id}`, {
+      const res = await fetch(`/api/projects/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus })
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`CATALOG_STATUS_UPDATE: Project '${id}' toggled live to '${nextStatus}' on backend.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_ERROR: Failed to save project status toggle to backend.`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await updateDoc(doc(db, "projects", id), { status: nextStatus });
+        addLog(`CATALOG_STATUS_UPDATE: Project '${id}' toggled to '${nextStatus}' directly via Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to save project status toggle to database.`);
+      }
     }
   };
 
@@ -330,16 +422,26 @@ export default function App() {
     setProjects(prev => [newProj, ...prev]);
 
     try {
-      await fetch('/api/projects', {
+      const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newProj)
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`CATALOG_ITEM_CREATED: Published case study '${newProj.name}' live to server.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_ERROR: Failed to register new project catalog on server.`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, setDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await setDoc(doc(db, "projects", newProj.id), newProj);
+        addLog(`CATALOG_ITEM_CREATED: Case study '${newProj.name}' created directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to register new project catalog on database.`);
+      }
     }
   };
 
@@ -348,12 +450,22 @@ export default function App() {
     setProjects(prev => prev.filter(p => p.id !== id));
 
     try {
-      await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`CATALOG_ITEM_DELETED: Project '${id}' purged from server-side store.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_ERROR: Failed to delete project on backend.`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await deleteDoc(doc(db, "projects", id));
+        addLog(`CATALOG_ITEM_DELETED: Project '${id}' purged directly from Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to delete project on database.`);
+      }
     }
   };
 
@@ -362,16 +474,26 @@ export default function App() {
     setTestimonials(prev => prev.map(t => t.id === id ? { ...t, status: 'approved' } : t));
 
     try {
-      await fetch(`/api/testimonials/${id}`, {
+      const res = await fetch(`/api/testimonials/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'approved' })
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`TESTIMONIAL_APPROVED: Approved public review submission from '${id}' on server.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_ERROR: Failed to approve testimonial on server.`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await updateDoc(doc(db, "testimonials", id), { status: 'approved' });
+        addLog(`TESTIMONIAL_APPROVED: Approved public review '${id}' directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to approve testimonial on database.`);
+      }
     }
   };
 
@@ -380,15 +502,25 @@ export default function App() {
     setTestimonials(prev => prev.map(t => t.id === id ? { ...t, status: 'rejected' } : t));
 
     try {
-      await fetch(`/api/testimonials/${id}`, {
+      const res = await fetch(`/api/testimonials/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'rejected' })
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`TESTIMONIAL_REJECTED: Archiving rejected testimonial '${id}' on server.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await updateDoc(doc(db, "testimonials", id), { status: 'rejected' });
+        addLog(`TESTIMONIAL_REJECTED: Testimonial '${id}' rejected directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+      }
     }
   };
 
@@ -397,12 +529,22 @@ export default function App() {
     setInquiries(prev => prev.filter(i => i.id !== id));
 
     try {
-      await fetch(`/api/inquiries/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/inquiries/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`LEAD_RESOLVED: Lead inquiry '${id}' archived on server.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_ERROR: Failed to resolve lead on backend.`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, deleteDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await deleteDoc(doc(db, "inquiries", id));
+        addLog(`LEAD_RESOLVED: Lead inquiry '${id}' archived directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to resolve lead on database.`);
+      }
     }
   };
 
@@ -421,14 +563,44 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(inqData)
       });
+      if (!res.ok) throw new Error('Server API failed');
       const data = await res.json();
       if (data.success) {
         addLog(`INCOMING_LEAD_DISPATCH: Lead saved on backend from '${inqData.fullName}' (${inqData.email})`);
       }
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      addLog(`SYNC_WARNING: Saved inquiry locally (server offline).`);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, setDoc, getDoc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        
+        await setDoc(doc(db, "inquiries", tempInq.id), tempInq);
+        
+        // Try incrementing metric
+        try {
+          const metricsRef = doc(db, "metrics", "dashboard");
+          const metricsDoc = await getDoc(metricsRef);
+          if (metricsDoc.exists()) {
+            const metrics = metricsDoc.data();
+            const today = new Date().getDay();
+            const index = today === 0 ? 6 : today - 1;
+            const leads = [...(metrics.weeklyPerformance?.leads || [15, 5, 12, 8, 15, 5, 10])];
+            leads[index] = (leads[index] || 0) + 1;
+            await updateDoc(metricsRef, {
+              "weeklyPerformance.leads": leads
+            });
+          }
+        } catch (metErr) {
+          console.warn('Inquiry metrics update failed:', metErr);
+        }
+
+        addLog(`INCOMING_LEAD_DISPATCH: Lead saved directly to Cloud Firestore from '${inqData.fullName}'.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_WARNING: Saved inquiry locally (database offline).`);
+      }
     }
   };
 
@@ -450,15 +622,25 @@ export default function App() {
     setTestimonials(prev => [tempTest, ...prev]);
 
     try {
-      await fetch('/api/testimonials', {
+      const res = await fetch('/api/testimonials', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(testData)
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`TESTIMONIAL_SUBMITTED: Received feedback draft from '${testData.name}'. Pending authorization.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, setDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await setDoc(doc(db, "testimonials", tempTest.id), tempTest);
+        addLog(`TESTIMONIAL_SUBMITTED: Testimonial from '${testData.name}' saved directly in Cloud Firestore (Pending review).`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+      }
     }
   };
 
@@ -473,15 +655,25 @@ export default function App() {
     setProjects(prev => [tempProj, ...prev]);
 
     try {
-      await fetch('/api/projects', {
+      const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(tempProj)
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`PROJECT_SUBMITTED: Received client proposal '${projectData.name}' from '${projectData.client}'.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, setDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await setDoc(doc(db, "projects", tempProj.id), tempProj);
+        addLog(`PROJECT_SUBMITTED: Case study proposal '${projectData.name}' saved directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+      }
     }
   };
 
@@ -490,15 +682,25 @@ export default function App() {
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status: 'published' } : p));
 
     try {
-      await fetch(`/api/projects/${id}`, {
+      const res = await fetch(`/api/projects/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'published' })
       });
+      if (!res.ok) throw new Error('Server API failed');
       addLog(`PROJECT_APPROVED: Approved client case study '${id}' on server.`);
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        const { doc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+        await updateDoc(doc(db, "projects", id), { status: 'published' });
+        addLog(`PROJECT_APPROVED: Case study '${id}' approved directly in Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+      }
     }
   };
 
@@ -541,14 +743,67 @@ export default function App() {
     addLog(`SIMULATION_TRIGGERED: Pinging server to inject live organic SEO traffic and incoming sample leads...`);
     try {
       const res = await fetch('/api/dashboard/simulate-traffic', { method: 'POST' });
+      if (!res.ok) throw new Error('Server API failed');
       const data = await res.json();
       if (data.success) {
         addLog(`SIMULATION_SUCCESS: Generated live sample lead for '${data.inquiry.fullName}'. Website hit count is now ${data.visitors}.`);
       }
       fetchLiveServerData(true);
     } catch (err) {
-      console.error('API Error:', err);
-      handleTriggerMockTrafficFallback();
+      console.warn('API Server unreachable, attempting direct Firestore simulation...', err);
+      try {
+        const { doc, setDoc, getDoc, updateDoc } = await import('firebase/firestore');
+        const { db } = await import('./lib/firebase');
+
+        const mockNames = ['Arthur Dent', 'Ford Prefect', 'Tricia McMillan', 'Zaphod Beeblebrox', 'Marvin Android'];
+        const mockEmails = ['arthur@heartofgold.net', 'ford@guide.galaxy', 'trillian@sub-ether.org', 'zaphod@president.galaxy', 'marvin@paranoid.com'];
+        const mockServices = ['Website Development', 'AI Automation', 'Enterprise Dashboard', 'E-Commerce Ecosystem'];
+        const mockMessages = [
+          'We require an interstellar booking client with real-time tachyon state management.',
+          'Requesting an automated semantic catalog generator integrated with high-performance edge assets.',
+          'Our luxury logistics routing requires custom visualizers matching our retro styling paradigm.',
+          'Can you optimize our product checkout systems for mobile-first luxury and low-bandwidth systems?',
+          'I have been requested to optimize our support queues, but it will probably be incredibly tedious.'
+        ];
+
+        const randomIndex = Math.floor(Math.random() * mockNames.length);
+        const newInq = {
+          id: `inq-mock-${Date.now()}`,
+          fullName: mockNames[randomIndex],
+          email: mockEmails[randomIndex],
+          service: mockServices[Math.floor(Math.random() * mockServices.length)],
+          message: mockMessages[randomIndex],
+          date: new Date().toISOString().split('T')[0]
+        };
+
+        // Write directly to Firestore inquiries
+        await setDoc(doc(db, "inquiries", newInq.id), newInq);
+
+        const metricsRef = doc(db, "metrics", "dashboard");
+        const metricsDoc = await getDoc(metricsRef);
+        if (metricsDoc.exists()) {
+          const metrics = metricsDoc.data();
+          const visitors = (metrics.visitors || 8420) + Math.floor(Math.random() * 85) + 15;
+          const today = new Date().getDay();
+          const index = today === 0 ? 6 : today - 1;
+          const leads = [...(metrics.weeklyPerformance?.leads || [15, 5, 12, 8, 15, 5, 10])];
+          leads[index] = (leads[index] || 0) + 1;
+          const traffic = [...(metrics.weeklyPerformance?.traffic || [180, 100, 150, 50, 120, 80, 150])];
+          traffic[index] = (traffic[index] || 0) + 15;
+
+          await updateDoc(metricsRef, {
+            visitors,
+            "weeklyPerformance.leads": leads,
+            "weeklyPerformance.traffic": traffic
+          });
+          
+          addLog(`SIMULATION_SUCCESS: Generated lead for '${newInq.fullName}' directly in Cloud Firestore. New hit count is ${visitors}.`);
+        }
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        handleTriggerMockTrafficFallback();
+      }
     }
   };
 
