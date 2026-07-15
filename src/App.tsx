@@ -12,6 +12,16 @@ import {
 } from './initialData';
 import { Calendar, Check, X, ShieldAlert, Sparkles, Send, Phone, MessageSquare, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { db } from './lib/firebase';
+import { 
+  collection, 
+  doc, 
+  getDoc, 
+  getDocs, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc 
+} from 'firebase/firestore';
 
 const getLocalStorage = <T,>(key: string, fallback: T): T => {
   try {
@@ -273,9 +283,6 @@ export default function App() {
       
       // Try to fetch from Firestore directly (e.g. for static Vercel deployment where Express backend is offline)
       try {
-        const { getDocs, collection, doc, getDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
-
         const inquiriesSnap = await getDocs(collection(db, "inquiries"));
         const fetchedInquiries = inquiriesSnap.docs.map(docSnap => docSnap.data() as Inquiry);
         fetchedInquiries.sort((a, b) => b.id.localeCompare(a.id));
@@ -405,8 +412,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await updateDoc(doc(db, "projects", id), { status: nextStatus });
         addLog(`CATALOG_STATUS_UPDATE: Project '${id}' toggled to '${nextStatus}' directly via Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -433,8 +438,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, setDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await setDoc(doc(db, "projects", newProj.id), newProj);
         addLog(`CATALOG_ITEM_CREATED: Case study '${newProj.name}' created directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -457,8 +460,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, deleteDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await deleteDoc(doc(db, "projects", id));
         addLog(`CATALOG_ITEM_DELETED: Project '${id}' purged directly from Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -485,8 +486,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await updateDoc(doc(db, "testimonials", id), { status: 'approved' });
         addLog(`TESTIMONIAL_APPROVED: Approved public review '${id}' directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -513,8 +512,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await updateDoc(doc(db, "testimonials", id), { status: 'rejected' });
         addLog(`TESTIMONIAL_REJECTED: Testimonial '${id}' rejected directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -536,8 +533,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, deleteDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await deleteDoc(doc(db, "inquiries", id));
         addLog(`LEAD_RESOLVED: Lead inquiry '${id}' archived directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -572,9 +567,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, setDoc, getDoc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
-        
         await setDoc(doc(db, "inquiries", tempInq.id), tempInq);
         
         // Try incrementing metric
@@ -633,8 +625,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, setDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await setDoc(doc(db, "testimonials", tempTest.id), tempTest);
         addLog(`TESTIMONIAL_SUBMITTED: Testimonial from '${testData.name}' saved directly in Cloud Firestore (Pending review).`);
         fetchLiveServerData(true);
@@ -666,8 +656,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, setDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await setDoc(doc(db, "projects", tempProj.id), tempProj);
         addLog(`PROJECT_SUBMITTED: Case study proposal '${projectData.name}' saved directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -693,8 +681,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore operation...', err);
       try {
-        const { doc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
         await updateDoc(doc(db, "projects", id), { status: 'published' });
         addLog(`PROJECT_APPROVED: Case study '${id}' approved directly in Cloud Firestore.`);
         fetchLiveServerData(true);
@@ -752,9 +738,6 @@ export default function App() {
     } catch (err) {
       console.warn('API Server unreachable, attempting direct Firestore simulation...', err);
       try {
-        const { doc, setDoc, getDoc, updateDoc } = await import('firebase/firestore');
-        const { db } = await import('./lib/firebase');
-
         const mockNames = ['Arthur Dent', 'Ford Prefect', 'Tricia McMillan', 'Zaphod Beeblebrox', 'Marvin Android'];
         const mockEmails = ['arthur@heartofgold.net', 'ford@guide.galaxy', 'trillian@sub-ether.org', 'zaphod@president.galaxy', 'marvin@paranoid.com'];
         const mockServices = ['Website Development', 'AI Automation', 'Enterprise Dashboard', 'E-Commerce Ecosystem'];
