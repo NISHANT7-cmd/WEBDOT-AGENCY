@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 
 // Config sourced directly from our provisioned applet configuration
 const firebaseConfig = {
@@ -14,5 +14,8 @@ const firebaseConfig = {
 // Initialize Firebase App
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore targeting our custom database ID
-export const db = getFirestore(app, "ai-studio-webdotagency-be7610f7-4b4d-40fb-95db-239c2619d8da");
+// Initialize Firestore targeting our custom database ID with experimentalForceLongPolling enabled
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+}, "ai-studio-webdotagency-be7610f7-4b4d-40fb-95db-239c2619d8da");
+
