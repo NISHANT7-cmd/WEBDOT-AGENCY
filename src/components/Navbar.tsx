@@ -1,7 +1,7 @@
 import React from 'react';
 import { ArrowUpRight, Terminal, Globe, Mail, Phone, MessageSquare } from 'lucide-react';
 // @ts-ignore
-import webdotLogo from '../assets/images/web.jpg';
+import webdotLogo from '../assets/images/web.png';
 
 interface NavbarProps {
   currentView: 'website' | 'command';
