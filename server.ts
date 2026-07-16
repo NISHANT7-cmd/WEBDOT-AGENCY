@@ -263,15 +263,36 @@ Scanned HTML Content Snippet: ${htmlContent ? htmlContent : "None available"}
 Additional Requirements/Notes: ${notes || "None provided"}
 Target Client Market: ${marketNames[market] || "US Market"}`;
 
-    const systemInstruction = `You are an elite enterprise software architect and digital agency pricing expert. 
-Your job is to analyze website details (and any scanned page code) to estimate the complexity, professional production cost, development timeline, and strategic billing recommendations for the agency.
+    const systemInstruction = `You are an elite digital agency Director of Pricing and Principal Software Architect.
+Your task is to analyze website parameters and optional code to generate a HIGHLY REALISTIC, PROFESSIONAL digital agency pricing proposal.
 
-CRITICAL: Estimate all costs (development, breakdowns, retainers) in the target market's LOCAL CURRENCY and standard pricing scales:
-- If market is "US", use US Dollar (USD, Symbol: $). Premium US/Global agency standard rates (e.g. $100-$250/hr).
-- If market is "IN", use Indian Rupee (INR, Symbol: ₹). Indian domestic agency standard rates (e.g. competitive pricing scaled for Indian startups or enterprises).
-- If market is "EU", use Euro (EUR, Symbol: €). European agency standard rates (high regulatory compliance, GDPR-focused, €80-€180/hr).
+DO NOT return freelance or low-ball rates (e.g. $500, $1000 for standard complex projects). Today's professional agency rates in 2026 are premium, accounting for end-to-end design, production engineering, QA, and deployment.
 
-Provide localized monetization advices, ROI arguments, and maintenance services that resonate with clients in that region.
+You MUST classify the project into one of the following 4 tiers and strictly adhere to today's standard pricing scales:
+
+1. "Low Complexity" (Brochure websites, high-end portfolios, single-page landing pages, clean landing pages):
+- US Market: $3,000 to $8,000 USD (Timeline: 2-4 Weeks. Retainer Support: $150-$350/mo)
+- EU Market: €3,000 to €7,500 EUR (Timeline: 2-4 Weeks. Retainer Support: €150-€300/mo)
+- Indian Market: ₹1,20,000 to ₹3,50,000 INR (Timeline: 2-4 Weeks. Retainer Support: ₹10,000-₹25,000/mo)
+
+2. "Medium Complexity" (Standard multi-page business sites, integrated custom blogs, light custom e-commerce stores with single stripe checkouts, standard booking/scheduling websites):
+- US Market: $10,000 to $25,000 USD (Timeline: 4-8 Weeks. Retainer Support: $400-$800/mo)
+- EU Market: €9,000 to €22,000 EUR (Timeline: 4-8 Weeks. Retainer Support: €350-€750/mo)
+- Indian Market: ₹4,00,000 to ₹10,00,000 INR (Timeline: 4-8 Weeks. Retainer Support: ₹25,000-₹60,000/mo)
+
+3. "High Complexity" (Full headless e-commerce, custom customer portals, SaaS platforms with custom workflows, multi-role dashboard applications, heavy API integrations, custom databases):
+- US Market: $30,000 to $60,000 USD (Timeline: 8-14 Weeks. Retainer Support: $1,000-$2,500/mo)
+- EU Market: €25,000 to €55,000 EUR (Timeline: 8-14 Weeks. Retainer Support: €900-€2,000/mo)
+- Indian Market: ₹12,00,000 to ₹25,00,000 INR (Timeline: 8-14 Weeks. Retainer Support: ₹60,000-₹1,50,000/mo)
+
+4. "Enterprise Complexity" (Massive legacy migrations, custom enterprise marketplaces, highly secure health/finance platforms, bespoke high-traffic distributed applications):
+- US Market: $75,000 to $150,000+ USD (Timeline: 12-24+ Weeks. Retainer Support: $3,000-$7,500/mo)
+- EU Market: €65,000 to €135,000+ EUR (Timeline: 12-24+ Weeks. Retainer Support: €2,500-€6,500/mo)
+- Indian Market: ₹30,00,000 to ₹80,00,000+ INR (Timeline: 12-24+ Weeks. Retainer Support: ₹1,50,000-₹4,00,000/mo)
+
+Ensure complexity parameter is one of: "Low", "Medium", "High", "Enterprise" (matching the Tier you select).
+All internal breakdowns (costBreakdown array categories e.g. UI/UX Design, Front-end Dev, Back-end API, Testing, Project Management) MUST sum up exactly to a value between estimatedCostMin and estimatedCostMax.
+Ensure standard currency symbols ($, €, ₹) and standard codes (USD, EUR, INR) are used according to the regional market selected.
 Return a structured pricing estimation breakdown in JSON format.`;
 
     const geminiRes = await ai.models.generateContent({
@@ -373,7 +394,32 @@ Return a structured pricing estimation breakdown in JSON format.`;
       }
     });
 
-    const parsedData = JSON.parse(geminiRes.text?.trim() || "{}");
+    let parsedData: any = {};
+    const textContent = geminiRes.text?.trim();
+    if (textContent) {
+      let cleanText = textContent;
+      if (cleanText.startsWith("```")) {
+        const lines = cleanText.split("\n");
+        if (lines[0].startsWith("```json") || lines[0].startsWith("```")) {
+          lines.shift();
+        }
+        if (lines[lines.length - 1].startsWith("```")) {
+          lines.pop();
+        }
+        cleanText = lines.join("\n").trim();
+      }
+      try {
+        parsedData = JSON.parse(cleanText);
+      } catch (parseErr) {
+        console.error("Failed to parse clean JSON, attempting regex extraction:", parseErr);
+        const match = cleanText.match(/\{[\s\S]*\}/);
+        if (match) {
+          parsedData = JSON.parse(match[0]);
+        } else {
+          throw parseErr;
+        }
+      }
+    }
     res.json({ success: true, scanSuccess, estimation: parsedData });
   } catch (error: any) {
     console.error("Gemini estimation failed:", error);
