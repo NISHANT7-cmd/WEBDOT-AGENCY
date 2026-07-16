@@ -48,6 +48,14 @@ export default function App() {
   const [stats, setStats] = useState<StatItem[]>(() => getLocalStorage('webdot_stats', initialStats));
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
+  const projectsRef = React.useRef(projects);
+  const testimonialsRef = React.useRef(testimonials);
+  const inquiriesRef = React.useRef(inquiries);
+
+  projectsRef.current = projects;
+  testimonialsRef.current = testimonials;
+  inquiriesRef.current = inquiries;
+
   // Real-time Event Logging Terminal
   const [systemLogs, setSystemLogs] = useState<string[]>(() => [
     `[${new Date().toLocaleTimeString()}] COMMAND TERMINAL ONLINE // SECURE DEPLOYMENT`,
@@ -63,6 +71,10 @@ export default function App() {
   // Secret URL / Hash detector for Admin entry
   React.useEffect(() => {
     const checkAdminAccess = () => {
+      // Guard against running multiple times or during an active authenticated session
+      if (sessionStorage.getItem('webdot_authenticated') === 'true') {
+        return;
+      }
       const search = window.location.search;
       const hash = window.location.hash;
       const searchParams = new URLSearchParams(search);
@@ -116,6 +128,12 @@ export default function App() {
   };
 
   const [isServerOnline, setIsServerOnline] = useState(true);
+  const isServerOnlineRef = React.useRef(true);
+
+  const setServerOnline = (online: boolean) => {
+    setIsServerOnline(online);
+    isServerOnlineRef.current = online;
+  };
 
   // Client-side statistics fallback calculator for environments like Vercel (static deployment)
   const calculateStatsLocally = React.useCallback((
@@ -241,6 +259,91 @@ export default function App() {
 
   // Sync data function that queries the live Express backend server
   const fetchLiveServerData = React.useCallback(async (isSilent = false) => {
+    // If the Express server is known to be offline (e.g. static/Vercel environments), skip the Express ping and fetch Firestore directly
+    if (!isServerOnlineRef.current) {
+      try {
+        const inquiriesSnap = await getDocs(collection(db, "inquiries"));
+        const fetchedInquiries = inquiriesSnap.docs.map(docSnap => docSnap.data() as Inquiry);
+        fetchedInquiries.sort((a, b) => b.id.localeCompare(a.id));
+        setInquiries(fetchedInquiries);
+        localStorage.setItem('webdot_inquiries', JSON.stringify(fetchedInquiries));
+
+        const projectsSnap = await getDocs(collection(db, "projects"));
+        const fetchedProjects = projectsSnap.docs.map(docSnap => docSnap.data() as Project);
+        fetchedProjects.sort((a, b) => b.id.localeCompare(a.id));
+        setProjects(fetchedProjects);
+        localStorage.setItem('webdot_projects', JSON.stringify(fetchedProjects));
+
+        const testimonialsSnap = await getDocs(collection(db, "testimonials"));
+        const fetchedTestimonials = testimonialsSnap.docs.map(docSnap => docSnap.data() as Testimonial);
+        fetchedTestimonials.sort((a, b) => b.id.localeCompare(a.id));
+        setTestimonials(fetchedTestimonials);
+        localStorage.setItem('webdot_testimonials', JSON.stringify(fetchedTestimonials));
+
+        // Fetch metrics
+        const metricsDoc = await getDoc(doc(db, "metrics", "dashboard"));
+        if (metricsDoc.exists()) {
+          const metrics = metricsDoc.data();
+          const totalLeads = fetchedInquiries.length;
+          const activeProjects = fetchedProjects.filter(p => p.status === 'published').length;
+          const approvedReviews = fetchedTestimonials.filter(t => t.status === 'approved').length;
+          const totalVisitors = metrics.visitors || 8420;
+          
+          const localStats = [
+            {
+              id: 'leads',
+              label: 'Total Leads',
+              value: totalLeads.toLocaleString(),
+              change: '+12% ↑',
+              status: 'growth',
+              icon: 'person_add',
+              sparkline: metrics.weeklyPerformance?.leads || [15, 5, 12, 8, 15, 5, 10]
+            },
+            {
+              id: 'projects',
+              label: 'Active Projects',
+              value: activeProjects.toString(),
+              change: 'Stable',
+              status: 'stable',
+              icon: 'rocket_launch',
+              sparkline: [10, 18, 10, 15, 5, 12, activeProjects]
+            },
+            {
+              id: 'visitors',
+              label: 'Website Visitors',
+              value: totalVisitors >= 1000 ? (totalVisitors / 1000).toFixed(1) + 'k' : totalVisitors.toString(),
+              change: '+4% ↑',
+              status: 'growth',
+              icon: 'visibility',
+              sparkline: metrics.weeklyPerformance?.traffic || [180, 100, 150, 50, 120, 80, 150]
+            },
+            {
+              id: 'reviews',
+              label: 'Approved Reviews',
+              value: approvedReviews.toString(),
+              change: '+85%',
+              status: 'growth',
+              icon: 'thumb_up',
+              sparkline: [5, 15, 5, 10, 12, 8, approvedReviews]
+            }
+          ];
+          setStats(localStats);
+          localStorage.setItem('webdot_stats', JSON.stringify(localStats));
+        }
+        if (!isSilent) {
+          addLog(`SYNC_COMPLETE: Live data stream pulled directly from Cloud Firestore (Vercel Serverless mode).`);
+        }
+      } catch (fbError) {
+        console.error('Direct Firestore fetch failed:', fbError);
+        setServerOnline(false);
+        calculateStatsLocally(projectsRef.current, testimonialsRef.current, inquiriesRef.current);
+        if (!isSilent) {
+          addLog(`SYNC_WARNING: Live server and Cloud Firestore unreachable. Cascaded to LocalStorage.`);
+        }
+      }
+      return;
+    }
+
     try {
       const statsRes = await fetch('/api/dashboard/stats');
       if (!statsRes.ok) throw new Error('API server unreachable');
@@ -274,7 +377,7 @@ export default function App() {
         localStorage.setItem('webdot_testimonials', JSON.stringify(testimonialsData.testimonials));
       }
 
-      setIsServerOnline(true);
+      setServerOnline(true);
       if (!isSilent) {
         addLog(`SYNC_COMPLETE: Live real-time dashboard data stream pulled from Express backend.`);
       }
@@ -352,20 +455,20 @@ export default function App() {
           localStorage.setItem('webdot_stats', JSON.stringify(localStats));
         }
 
-        setIsServerOnline(true); // Direct Firestore connection represents a live connected database
+        setServerOnline(false); // Express backend is offline, but Firestore direct connection is live. Mark as Express offline to stop repetitive fetch errors.
         if (!isSilent) {
           addLog(`SYNC_COMPLETE: Live data stream pulled directly from Cloud Firestore (Vercel Serverless mode).`);
         }
       } catch (fbError) {
         console.error('Direct Firestore fetch failed:', fbError);
-        setIsServerOnline(false);
-        calculateStatsLocally(projects, testimonials, inquiries);
+        setServerOnline(false);
+        calculateStatsLocally(projectsRef.current, testimonialsRef.current, inquiriesRef.current);
         if (!isSilent) {
           addLog(`SYNC_WARNING: Live server and Cloud Firestore unreachable. Cascaded to LocalStorage.`);
         }
       }
     }
-  }, [projects, testimonials, inquiries, calculateStatsLocally]);
+  }, [calculateStatsLocally]);
 
   // Perform initial fetch on mount and setup polling
   React.useEffect(() => {
