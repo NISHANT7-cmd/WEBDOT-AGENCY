@@ -163,6 +163,23 @@ async function seedDatabaseIfNeeded() {
     } else {
       console.log("Firestore database contains existing records. Seeding skipped.");
     }
+
+    // Seed categories if empty
+    const categoriesSnapshot = await db.collection("categories").limit(1).get();
+    if (categoriesSnapshot.empty) {
+      console.log("Seeding default project categories...");
+      const initialCats = [
+        'Luxury Real Estate',
+        'Healthcare Tech',
+        'Luxury Retail',
+        'AI Logistics',
+        'Travel & Leisure'
+      ];
+      for (const cat of initialCats) {
+        const id = cat.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        await db.collection("categories").doc(id).set({ id, name: cat });
+      }
+    }
   } catch (error) {
     console.error("Failed to seed Firestore:", error);
   }
@@ -721,6 +738,76 @@ app.put("/api/testimonials/:id", async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
     await db.collection("testimonials").doc(id).set({ status }, { merge: true });
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// CATEGORIES ENDPOINTS
+app.get("/api/categories", async (req, res) => {
+  try {
+    const snap = await db.collection("categories").get();
+    const categories = snap.docs.map(doc => doc.data());
+    categories.sort((a: any, b: any) => a.name.localeCompare(b.name));
+    res.json({ success: true, categories });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/categories", async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "Name is required" });
+    }
+    const id = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-");
+    const category = { id, name: name.trim() };
+    await db.collection("categories").doc(id).set(category);
+    res.json({ success: true, category });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.collection("categories").doc(id).delete();
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/quotations", async (req, res) => {
+  try {
+    const snap = await db.collection("quotations").get();
+    const quotations = snap.docs.map(doc => doc.data());
+    res.json({ success: true, quotations });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/quotations", async (req, res) => {
+  try {
+    const quotation = req.body;
+    if (!quotation.id) {
+      return res.status(400).json({ error: "Quotation ID is required" });
+    }
+    await db.collection("quotations").doc(quotation.id).set(quotation);
+    res.json({ success: true, quotation });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete("/api/quotations/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.collection("quotations").doc(id).delete();
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

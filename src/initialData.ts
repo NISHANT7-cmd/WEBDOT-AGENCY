@@ -269,3 +269,11 @@ export const initialInquiries: Inquiry[] = [
     date: '2026-07-11'
   }
 ];
+
+export const initialCategories: string[] = [
+  'Luxury Real Estate',
+  'Healthcare Tech',
+  'Luxury Retail',
+  'AI Logistics',
+  'Travel & Leisure'
+];

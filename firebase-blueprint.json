@@ -52,6 +52,33 @@
         "visitors": "Number (total accumulated web visitors count)",
         "weeklyPerformance": "Object with traffic (Array of 7 Numbers) and leads (Array of 7 Numbers)"
       }
+    },
+    {
+      "collectionId": "categories",
+      "description": "Dynamic project categories list for navigation and filtering of case studies.",
+      "fields": {
+        "id": "String (unique slug matching category name)",
+        "name": "String (category name)"
+      }
+    },
+    {
+      "collectionId": "quotations",
+      "description": "Commercial quotation proposals with scope breakdown, payment milestones, and terms.",
+      "fields": {
+        "id": "String (unique quotation ID, e.g. QT-1234)",
+        "clientName": "String (client full name)",
+        "clientCompany": "String (client company name)",
+        "clientEmail": "String (client email address)",
+        "projectName": "String (project name)",
+        "date": "String (formatted date)",
+        "validUntil": "String (expiry date)",
+        "items": "Array of Objects ({ description, amount })",
+        "paymentMilestones": "Array of Objects ({ label, percentage, amount, description })",
+        "terms": "Array of Strings",
+        "totalAmount": "Number (total budget)",
+        "notes": "String (optional note details)",
+        "status": "String (draft | sent | accepted | expired)"
+      }
     }
   ]
 }

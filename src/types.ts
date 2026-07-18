@@ -59,3 +59,31 @@ export interface StatItem {
   icon: string;
   sparkline: number[];
 }
+
+export interface QuotationItem {
+  description: string;
+  amount: number;
+}
+
+export interface PaymentMilestone {
+  label: string;
+  percentage: number;
+  amount: number;
+  description: string;
+}
+
+export interface Quotation {
+  id: string;
+  clientName: string;
+  clientCompany: string;
+  clientEmail: string;
+  projectName: string;
+  date: string;
+  validUntil: string;
+  items: QuotationItem[];
+  paymentMilestones: PaymentMilestone[];
+  terms: string[];
+  totalAmount: number;
+  notes?: string;
+  status: 'draft' | 'sent' | 'accepted' | 'expired';
+}

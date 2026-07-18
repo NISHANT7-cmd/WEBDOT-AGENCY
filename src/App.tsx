@@ -3,12 +3,13 @@ import Navbar from './components/Navbar';
 import LandingPage from './components/LandingPage';
 import AdminCommandDashboard from './components/AdminCommandDashboard';
 import CaseStudyModal from './components/CaseStudyModal';
-import { Project, Testimonial, Inquiry, StatItem } from './types';
+import { Project, Testimonial, Inquiry, StatItem, Quotation } from './types';
 import { 
   initialProjects, 
   initialTestimonials, 
   initialInquiries, 
-  initialStats 
+  initialStats,
+  initialCategories
 } from './initialData';
 import { Calendar, Check, X, ShieldAlert, Sparkles, Send, Phone, MessageSquare, Mail } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -46,15 +47,21 @@ export default function App() {
   const [testimonials, setTestimonials] = useState<Testimonial[]>(() => getLocalStorage('webdot_testimonials', initialTestimonials));
   const [inquiries, setInquiries] = useState<Inquiry[]>(() => getLocalStorage('webdot_inquiries', initialInquiries));
   const [stats, setStats] = useState<StatItem[]>(() => getLocalStorage('webdot_stats', initialStats));
+  const [categories, setCategories] = useState<string[]>(() => getLocalStorage('webdot_categories', initialCategories));
+  const [quotations, setQuotations] = useState<Quotation[]>(() => getLocalStorage('webdot_quotations', []));
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
 
   const projectsRef = React.useRef(projects);
   const testimonialsRef = React.useRef(testimonials);
   const inquiriesRef = React.useRef(inquiries);
+  const categoriesRef = React.useRef(categories);
+  const quotationsRef = React.useRef(quotations);
 
   projectsRef.current = projects;
   testimonialsRef.current = testimonials;
   inquiriesRef.current = inquiries;
+  categoriesRef.current = categories;
+  quotationsRef.current = quotations;
 
   // Real-time Event Logging Terminal
   const [systemLogs, setSystemLogs] = useState<string[]>(() => [
@@ -237,6 +244,14 @@ export default function App() {
     localStorage.setItem('webdot_stats', JSON.stringify(stats));
   }, [stats]);
 
+  React.useEffect(() => {
+    localStorage.setItem('webdot_categories', JSON.stringify(categories));
+  }, [categories]);
+
+  React.useEffect(() => {
+    localStorage.setItem('webdot_quotations', JSON.stringify(quotations));
+  }, [quotations]);
+
   // Ping server on initial load to register real-time visitor hit
   React.useEffect(() => {
     fetch('/api/visitors/ping', { method: 'POST' })
@@ -279,6 +294,27 @@ export default function App() {
         fetchedTestimonials.sort((a, b) => b.id.localeCompare(a.id));
         setTestimonials(fetchedTestimonials);
         localStorage.setItem('webdot_testimonials', JSON.stringify(fetchedTestimonials));
+
+        // Fetch categories directly from firestore
+        const categoriesSnap = await getDocs(collection(db, "categories"));
+        let fetchedCategories = categoriesSnap.docs.map(docSnap => (docSnap.data() as any).name as string);
+        if (fetchedCategories.length === 0) {
+          fetchedCategories = initialCategories;
+        } else {
+          fetchedCategories.sort((a, b) => a.localeCompare(b));
+        }
+        setCategories(fetchedCategories);
+        localStorage.setItem('webdot_categories', JSON.stringify(fetchedCategories));
+
+        // Fetch quotations directly from firestore
+        try {
+          const quotationsSnap = await getDocs(collection(db, "quotations"));
+          const fetchedQuotations = quotationsSnap.docs.map(docSnap => docSnap.data() as Quotation);
+          setQuotations(fetchedQuotations);
+          localStorage.setItem('webdot_quotations', JSON.stringify(fetchedQuotations));
+        } catch (qErr) {
+          console.warn("Direct quotations firestore query failed on offline-mode:", qErr);
+        }
 
         // Fetch metrics
         const metricsDoc = await getDoc(doc(db, "metrics", "dashboard"));
@@ -377,6 +413,25 @@ export default function App() {
         localStorage.setItem('webdot_testimonials', JSON.stringify(testimonialsData.testimonials));
       }
 
+      const categoriesRes = await fetch('/api/categories');
+      if (categoriesRes.ok) {
+        const categoriesData = await categoriesRes.json();
+        if (categoriesData.success) {
+          const fetchedCats = categoriesData.categories.map((c: any) => c.name);
+          setCategories(fetchedCats);
+          localStorage.setItem('webdot_categories', JSON.stringify(fetchedCats));
+        }
+      }
+
+      const quotationsRes = await fetch('/api/quotations');
+      if (quotationsRes.ok) {
+        const quotationsData = await quotationsRes.json();
+        if (quotationsData.success) {
+          setQuotations(quotationsData.quotations);
+          localStorage.setItem('webdot_quotations', JSON.stringify(quotationsData.quotations));
+        }
+      }
+
       setServerOnline(true);
       if (!isSilent) {
         addLog(`SYNC_COMPLETE: Live real-time dashboard data stream pulled from Express backend.`);
@@ -403,6 +458,27 @@ export default function App() {
         fetchedTestimonials.sort((a, b) => b.id.localeCompare(a.id));
         setTestimonials(fetchedTestimonials);
         localStorage.setItem('webdot_testimonials', JSON.stringify(fetchedTestimonials));
+
+        // Fetch categories directly from firestore
+        const categoriesSnap = await getDocs(collection(db, "categories"));
+        let fetchedCategories = categoriesSnap.docs.map(docSnap => (docSnap.data() as any).name as string);
+        if (fetchedCategories.length === 0) {
+          fetchedCategories = initialCategories;
+        } else {
+          fetchedCategories.sort((a, b) => a.localeCompare(b));
+        }
+        setCategories(fetchedCategories);
+        localStorage.setItem('webdot_categories', JSON.stringify(fetchedCategories));
+
+        // Fetch quotations directly from firestore
+        try {
+          const quotationsSnap = await getDocs(collection(db, "quotations"));
+          const fetchedQuotations = quotationsSnap.docs.map(docSnap => docSnap.data() as Quotation);
+          setQuotations(fetchedQuotations);
+          localStorage.setItem('webdot_quotations', JSON.stringify(fetchedQuotations));
+        } catch (qErr) {
+          console.warn("Direct quotations firestore query failed on catch fallback:", qErr);
+        }
 
         // Fetch metrics
         const metricsDoc = await getDoc(doc(db, "metrics", "dashboard"));
@@ -547,6 +623,125 @@ export default function App() {
       } catch (fbErr) {
         console.error('Firestore Error:', fbErr);
         addLog(`SYNC_ERROR: Failed to register new project catalog on database.`);
+      }
+    }
+  };
+
+  // Add dynamic project category
+  const handleAddCategory = async (catName: string) => {
+    const trimmed = catName.trim();
+    if (!trimmed) return;
+    
+    // Check if it already exists
+    if (categoriesRef.current.some(c => c.toLowerCase() === trimmed.toLowerCase())) {
+      addLog(`CATEGORY_WARNING: Category '${trimmed}' already exists.`);
+      return;
+    }
+
+    setCategories(prev => [...prev, trimmed].sort((a, b) => a.localeCompare(b)));
+
+    try {
+      const res = await fetch('/api/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed })
+      });
+      if (!res.ok) throw new Error('Server API failed');
+      addLog(`CATEGORY_CREATED: Dynamic project category '${trimmed}' added successfully.`);
+      fetchLiveServerData(true);
+    } catch (err) {
+      console.warn('API Server unreachable, attempting direct Firestore operation for category...', err);
+      try {
+        const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        await setDoc(doc(db, "categories", id), { id, name: trimmed });
+        addLog(`CATEGORY_CREATED: Dynamic project category '${trimmed}' saved directly to Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to save dynamic category on database.`);
+      }
+    }
+  };
+
+  // Delete project category
+  const handleDeleteCategory = async (catName: string) => {
+    const trimmed = catName.trim();
+    if (!trimmed) return;
+
+    setCategories(prev => prev.filter(c => c !== trimmed));
+
+    try {
+      const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Server API failed');
+      addLog(`CATEGORY_DELETED: Dynamic project category '${trimmed}' deleted successfully.`);
+      fetchLiveServerData(true);
+    } catch (err) {
+      console.warn('API Server unreachable, attempting direct Firestore operation for category...', err);
+      try {
+        const id = trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+        await deleteDoc(doc(db, "categories", id));
+        addLog(`CATEGORY_DELETED: Dynamic project category '${trimmed}' purged directly from Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to delete category on database.`);
+      }
+    }
+  };
+
+  // Save or update quotation
+  const handleSaveQuotation = async (newQuote: Quotation) => {
+    setQuotations(prev => {
+      const idx = prev.findIndex(q => q.id === newQuote.id);
+      if (idx > -1) {
+        const copy = [...prev];
+        copy[idx] = newQuote;
+        return copy;
+      }
+      return [newQuote, ...prev];
+    });
+
+    try {
+      const res = await fetch('/api/quotations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newQuote)
+      });
+      if (!res.ok) throw new Error('Server API failed');
+      addLog(`QUOTATION_SAVED: Quotation for '${newQuote.clientName}' saved successfully.`);
+      fetchLiveServerData(true);
+    } catch (err) {
+      console.warn('API Server unreachable, attempting direct Firestore operation for quotation...', err);
+      try {
+        await setDoc(doc(db, "quotations", newQuote.id), newQuote);
+        addLog(`QUOTATION_SAVED: Quotation for '${newQuote.clientName}' saved directly to Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to save quotation on database.`);
+      }
+    }
+  };
+
+  // Delete quotation
+  const handleDeleteQuotation = async (id: string) => {
+    setQuotations(prev => prev.filter(q => q.id !== id));
+
+    try {
+      const res = await fetch(`/api/quotations/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Server API failed');
+      addLog(`QUOTATION_DELETED: Quotation purged successfully.`);
+      fetchLiveServerData(true);
+    } catch (err) {
+      console.warn('API Server unreachable, attempting direct Firestore operation...', err);
+      try {
+        await deleteDoc(doc(db, "quotations", id));
+        addLog(`QUOTATION_DELETED: Quotation purged directly from Cloud Firestore.`);
+        fetchLiveServerData(true);
+      } catch (fbErr) {
+        console.error('Firestore Error:', fbErr);
+        addLog(`SYNC_ERROR: Failed to delete quotation from database.`);
       }
     }
   };
@@ -935,6 +1130,8 @@ export default function App() {
             onSubmitInquiry={handleInquirySubmit}
             onSubmitTestimonial={handleTestimonialSubmit}
             onSubmitProject={handleClientProjectSubmit}
+            categories={categories}
+            onAddCategory={handleAddCategory}
           />
         ) : (
           <AdminCommandDashboard 
@@ -953,6 +1150,12 @@ export default function App() {
             onDeleteInquiry={handleDeleteInquiry}
             onTriggerMockTraffic={handleTriggerMockTraffic}
             onLockPortal={handleLockPortal}
+            categories={categories}
+            onAddCategory={handleAddCategory}
+            onDeleteCategory={handleDeleteCategory}
+            quotations={quotations}
+            onSaveQuotation={handleSaveQuotation}
+            onDeleteQuotation={handleDeleteQuotation}
           />
         )}
       </main>

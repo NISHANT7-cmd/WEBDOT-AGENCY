@@ -4,9 +4,10 @@ import {
   PlusCircle, Trash2, CheckCircle, Eye, EyeOff, UserPlus, 
   Settings, TrendingUp, Sparkles, MessageSquare, Briefcase, 
   Layers, RefreshCw, Star, Ban, Mail, Check, Terminal, ExternalLink, ShieldAlert,
-  DollarSign, Clock, Globe, Cpu, Wand2, Activity
+  DollarSign, Clock, Globe, Cpu, Wand2, Activity, FileText, Download, Edit3, X, Sparkle, Percent
 } from 'lucide-react';
-import { Project, Testimonial, Inquiry, StatItem } from '../types';
+import { jsPDF } from 'jspdf';
+import { Project, Testimonial, Inquiry, StatItem, Quotation, QuotationItem, PaymentMilestone } from '../types';
 import { resolveProjectImage } from '../utils/imageResolver';
 
 interface AdminCommandDashboardProps {
@@ -25,6 +26,12 @@ interface AdminCommandDashboardProps {
   onDeleteInquiry: (id: string) => void;
   onTriggerMockTraffic: () => void;
   onLockPortal?: () => void;
+  categories?: string[];
+  onAddCategory?: (category: string) => Promise<void>;
+  onDeleteCategory?: (category: string) => Promise<void>;
+  quotations?: Quotation[];
+  onSaveQuotation?: (quotation: Quotation) => Promise<void>;
+  onDeleteQuotation?: (id: string) => Promise<void>;
 }
 
 export default function AdminCommandDashboard({
@@ -42,7 +49,13 @@ export default function AdminCommandDashboard({
   onRejectTestimonial,
   onDeleteInquiry,
   onTriggerMockTraffic,
-  onLockPortal
+  onLockPortal,
+  categories = [],
+  onAddCategory,
+  onDeleteCategory,
+  quotations = [],
+  onSaveQuotation,
+  onDeleteQuotation
 }: AdminCommandDashboardProps) {
   // Authentication Guard States
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
@@ -62,7 +75,7 @@ export default function AdminCommandDashboard({
     name: '',
     client: '',
     description: '',
-    industry: 'Luxury Real Estate',
+    industry: categories[0] || 'Luxury Real Estate',
     role: '',
     timeline: '',
     tagsString: '',
@@ -77,8 +90,387 @@ export default function AdminCommandDashboard({
     resultsStr3: '50k', resultsLbl3: 'Active requests'
   });
 
+  const [showAdminNewCategoryInput, setShowAdminNewCategoryInput] = useState(false);
+  const [adminNewCategoryName, setAdminNewCategoryName] = useState('');
+  const [panelNewCategoryName, setPanelNewCategoryName] = useState('');
+
+  React.useEffect(() => {
+    if (categories.length > 0 && (!newProject.industry || newProject.industry === 'Luxury Real Estate' && !categories.includes('Luxury Real Estate'))) {
+      setNewProject(prev => ({ ...prev, industry: categories[0] }));
+    }
+  }, [categories]);
+
   // Table active filter state
   const [projectFilter, setProjectFilter] = useState<'all' | 'published' | 'draft' | 'pending'>('all');
+
+  // Tab controller
+  const [activePortalTab, setActivePortalTab] = useState<'operations' | 'quotations'>('operations');
+
+  // Quotation Portal states
+  const [isEditingQuotation, setIsEditingQuotation] = useState(false);
+  const [editingQuotationId, setEditingQuotationId] = useState<string | null>(null);
+
+  // Form states for Quotation Editor
+  const [quoteClientName, setQuoteClientName] = useState('');
+  const [quoteClientCompany, setQuoteClientCompany] = useState('');
+  const [quoteClientEmail, setQuoteClientEmail] = useState('');
+  const [quoteProjectName, setQuoteProjectName] = useState('');
+  const [quoteDate, setQuoteDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [quoteValidUntil, setQuoteValidUntil] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30); // 30 days valid by default
+    return d.toISOString().split('T')[0];
+  });
+  const [quoteItems, setQuoteItems] = useState<{ description: string; amount: number }[]>([
+    { description: 'UX/UI High-Fidelity Interactive Wireframing & Prototyping', amount: 3500 },
+    { description: 'Responsive Frontend Interface Development (React + Tailwind CSS)', amount: 4800 },
+    { description: 'Custom Express API Middleware Integration & Cloud Firestore Hookup', amount: 4200 }
+  ]);
+  const [quoteMilestones, setQuoteMilestones] = useState<{ label: string; percentage: number; amount: number; description: string }[]>([
+    { label: 'Advance Commencement Retainer', percentage: 40, amount: 5000, description: 'Due upon execution of agreement before engineering kick-off.' },
+    { label: 'Beta Prototype Milestone Delivery', percentage: 30, amount: 3750, description: 'Due upon client approval of core layout and visual architecture.' },
+    { label: 'Final Deployment & Production Launch', percentage: 30, amount: 3750, description: 'Due prior to transferring server ownership and final release.' }
+  ]);
+  const [quoteTerms, setQuoteTerms] = useState<string[]>([
+    'Project commencement is contingent upon the clearance of the initial advance commencement retainer payment.',
+    'All requested source assets, creative copies, and API secrets must be delivered by the client in a timely manner.',
+    'Intellectual property ownership and source repositories will transfer to the client upon final complete payment.',
+    'Standard scope support is valid for 30 days post-launch. Subsequent requests will require separate SLA agreements.'
+  ]);
+  const [quoteNotes, setQuoteNotes] = useState('');
+  const [quoteStatus, setQuoteStatus] = useState<'draft' | 'sent' | 'accepted' | 'expired'>('draft');
+
+  const totalQuoteAmount = quoteItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
+  // Automatically sync milestone amounts whenever totalQuoteAmount or percentages change
+  React.useEffect(() => {
+    setQuoteMilestones(prev => prev.map(m => ({
+      ...m,
+      amount: Math.round((totalQuoteAmount * (Number(m.percentage) || 0)) / 100)
+    })));
+  }, [totalQuoteAmount]);
+
+  const resetQuotationForm = () => {
+    setIsEditingQuotation(false);
+    setEditingQuotationId(null);
+    setQuoteClientName('');
+    setQuoteClientCompany('');
+    setQuoteClientEmail('');
+    setQuoteProjectName('');
+    setQuoteDate(new Date().toISOString().split('T')[0]);
+    
+    const expiry = new Date();
+    expiry.setDate(expiry.getDate() + 30);
+    setQuoteValidUntil(expiry.toISOString().split('T')[0]);
+
+    setQuoteItems([
+      { description: 'UX/UI High-Fidelity Interactive Wireframing & Prototyping', amount: 3500 },
+      { description: 'Responsive Frontend Interface Development (React + Tailwind CSS)', amount: 4800 },
+      { description: 'Custom Express API Middleware Integration & Cloud Firestore Hookup', amount: 4200 }
+    ]);
+    setQuoteMilestones([
+      { label: 'Advance Commencement Retainer', percentage: 40, amount: 5000, description: 'Due upon execution of agreement before engineering kick-off.' },
+      { label: 'Beta Prototype Milestone Delivery', percentage: 30, amount: 3750, description: 'Due upon client approval of core layout and visual architecture.' },
+      { label: 'Final Deployment & Production Launch', percentage: 30, amount: 3750, description: 'Due prior to transferring server ownership and final release.' }
+    ]);
+    setQuoteTerms([
+      'Project commencement is contingent upon the clearance of the initial advance commencement retainer payment.',
+      'All requested source assets, creative copies, and API secrets must be delivered by the client in a timely manner.',
+      'Intellectual property ownership and source repositories will transfer to the client upon final complete payment.',
+      'Standard scope support is valid for 30 days post-launch. Subsequent requests will require separate SLA agreements.'
+    ]);
+    setQuoteNotes('');
+    setQuoteStatus('draft');
+  };
+
+  const handleLoadQuotationForEdit = (q: Quotation) => {
+    setIsEditingQuotation(true);
+    setEditingQuotationId(q.id);
+    setQuoteClientName(q.clientName);
+    setQuoteClientCompany(q.clientCompany);
+    setQuoteClientEmail(q.clientEmail);
+    setQuoteProjectName(q.projectName);
+    setQuoteDate(q.date);
+    setQuoteValidUntil(q.validUntil);
+    setQuoteItems(q.items);
+    setQuoteMilestones(q.paymentMilestones);
+    setQuoteTerms(q.terms);
+    setQuoteNotes(q.notes || '');
+    setQuoteStatus(q.status);
+  };
+
+  const handleFormSubmitQuotation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quoteClientName || !quoteProjectName) return;
+
+    // Validate milestone percentages sum to 100
+    const totalPercentage = quoteMilestones.reduce((sum, m) => sum + (Number(m.percentage) || 0), 0);
+    if (totalPercentage !== 100) {
+      alert(`Milestone percentages must sum up exactly to 100%. Current sum: ${totalPercentage}%`);
+      return;
+    }
+
+    const quotationData: Quotation = {
+      id: editingQuotationId || `QT-${Math.floor(100000 + Math.random() * 900000)}`,
+      clientName: quoteClientName,
+      clientCompany: quoteClientCompany,
+      clientEmail: quoteClientEmail,
+      projectName: quoteProjectName,
+      date: quoteDate,
+      validUntil: quoteValidUntil,
+      items: quoteItems,
+      paymentMilestones: quoteMilestones.map(m => ({
+        ...m,
+        amount: Math.round((totalQuoteAmount * (Number(m.percentage) || 0)) / 100)
+      })),
+      terms: quoteTerms,
+      totalAmount: totalQuoteAmount,
+      notes: quoteNotes,
+      status: quoteStatus
+    };
+
+    if (onSaveQuotation) {
+      await onSaveQuotation(quotationData);
+    }
+    resetQuotationForm();
+  };
+
+  const handleDownloadQuotationPDF = (quotation: Quotation) => {
+    try {
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+
+      // Color Palette
+      const primaryColor = [11, 22, 44]; // Deep Slate Blue (#0b162c)
+      const accentColor = [59, 130, 246];  // WebDot Cyan/Blue (#3b82f6)
+      const textColor = [51, 65, 85];     // Charcoal (#334155)
+      const lightBg = [248, 250, 252];    // Cool light gray (#f8fafc)
+
+      // Page 1 Setup
+      let y = 20;
+
+      // Header Logo Box
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(15, y, 45, 12, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text('WEBDOT', 20, y + 8);
+
+      // Agency Info
+      doc.setTextColor(100, 116, 139);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.text('WEBDOT CREATIVE AGENCY', 150, y + 4);
+      doc.text('hello@webdot.agency', 150, y + 8);
+      doc.text('https://webdot.agency', 150, y + 12);
+
+      y += 24;
+
+      // Title "QUOTATION"
+      doc.setFillColor(accentColor[0], accentColor[1], accentColor[2]);
+      doc.rect(15, y, 180, 1, 'F');
+      
+      y += 8;
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(20);
+      doc.text('PROJECT QUOTATION', 15, y);
+
+      y += 10;
+
+      // Meta info grid (Left: Quote Metadata, Right: Client Metadata)
+      // Box backgrounds
+      doc.setFillColor(lightBg[0], lightBg[1], lightBg[2]);
+      doc.rect(15, y, 85, 36, 'F');
+      doc.rect(110, y, 85, 36, 'F');
+
+      doc.setFontSize(9);
+      // Left: Quote details
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.text('QUOTATION DETAILS', 20, y + 6);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+      doc.text(`Quotation ID: ${quotation.id}`, 20, y + 13);
+      doc.text(`Date Issued: ${quotation.date}`, 20, y + 20);
+      doc.text(`Valid Until: ${quotation.validUntil}`, 20, y + 27);
+
+      // Right: Client details
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.text('PREPARED FOR CLIENT', 115, y + 6);
+      
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+      doc.text(`Client Name: ${quotation.clientName}`, 115, y + 13);
+      doc.text(`Company: ${quotation.clientCompany}`, 115, y + 20);
+      doc.text(`Email: ${quotation.clientEmail}`, 115, y + 27);
+
+      y += 46;
+
+      // Project Title
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12);
+      doc.text(`Project Target: ${quotation.projectName}`, 15, y);
+
+      y += 8;
+
+      // Items Table Header
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(15, y, 180, 8, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text('SCOPE DESCRIPTION', 20, y + 5.5);
+      doc.text('ESTIMATED COST (USD)', 150, y + 5.5);
+
+      y += 8;
+
+      // Items list
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+      
+      quotation.items.forEach((item, index) => {
+        // Alternating fill
+        if (index % 2 === 1) {
+          doc.setFillColor(lightBg[0], lightBg[1], lightBg[2]);
+          doc.rect(15, y, 180, 8, 'F');
+        }
+        doc.text(item.description, 20, y + 5.5);
+        doc.text(`$${item.amount.toLocaleString()}`, 150, y + 5.5);
+        y += 8;
+      });
+
+      // Table bottom border line
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(15, y, 180, 0.5, 'F');
+
+      y += 8;
+
+      // Total Summary Panel
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text('TOTAL PROJECT BUDGET', 90, y);
+      doc.setFontSize(12);
+      doc.setTextColor(accentColor[0], accentColor[1], accentColor[2]);
+      doc.text(`$${quotation.totalAmount.toLocaleString()}`, 150, y);
+
+      y += 12;
+
+      // Payment Schedule
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text('PAYMENT MILESTONES & SCHEDULE', 15, y);
+      
+      y += 6;
+      doc.setFillColor(accentColor[0], accentColor[1], accentColor[2]);
+      doc.rect(15, y, 30, 0.8, 'F');
+      
+      y += 8;
+
+      quotation.paymentMilestones.forEach((milestone) => {
+        // Check page height space
+        if (y > 260) {
+          doc.addPage();
+          y = 20;
+        }
+        
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(9.5);
+        doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.text(`${milestone.label} (${milestone.percentage}%)`, 15, y);
+        
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(accentColor[0], accentColor[1], accentColor[2]);
+        doc.text(`$${milestone.amount.toLocaleString()}`, 150, y);
+        
+        y += 5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8.5);
+        doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+        
+        // Wrap text for long description
+        const lines = doc.splitTextToSize(milestone.description, 170);
+        doc.text(lines, 15, y);
+        
+        y += (lines.length * 4) + 6;
+      });
+
+      // Terms and Conditions Section (Page break if space is tight)
+      if (y > 200) {
+        doc.addPage();
+        y = 20;
+      } else {
+        y += 8;
+      }
+
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.text('TERMS & CONDITIONS', 15, y);
+      
+      y += 6;
+      doc.setFillColor(accentColor[0], accentColor[1], accentColor[2]);
+      doc.rect(15, y, 30, 0.8, 'F');
+      
+      y += 8;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+
+      quotation.terms.forEach((term) => {
+        if (y > 275) {
+          doc.addPage();
+          y = 20;
+        }
+        const lines = doc.splitTextToSize(term, 175);
+        doc.text(lines, 15, y);
+        y += (lines.length * 4.5) + 2;
+      });
+
+      // Notes if exists
+      if (quotation.notes && quotation.notes.trim()) {
+        if (y > 230) {
+          doc.addPage();
+          y = 20;
+        } else {
+          y += 8;
+        }
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.text('ADDITIONAL PROJECT NOTES', 15, y);
+        
+        y += 5;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+        doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+        
+        const lines = doc.splitTextToSize(quotation.notes, 175);
+        doc.text(lines, 15, y);
+      }
+
+      // Save the PDF
+      const filename = `Quotation_${quotation.clientName.replace(/\s+/g, '_')}_${quotation.id}.pdf`;
+      doc.save(filename);
+      onAddLog(`PDF_GENERATED: Downloaded quotation PDF for '${quotation.clientName}'.`);
+    } catch (pdfErr) {
+      console.error("Failed to generate PDF:", pdfErr);
+      alert("Error generating PDF. Please check console.");
+    }
+  };
 
   // AI Cost Estimator States
   const [calculatorUrl, setCalculatorUrl] = useState('');
@@ -327,7 +719,7 @@ export default function AdminCommandDashboard({
     setShowAddProjectModal(false);
     // Reset form
     setNewProject({
-      name: '', client: '', description: '', industry: 'Luxury Real Estate', role: '', timeline: '', tagsString: '',
+      name: '', client: '', description: '', industry: categories[0] || 'Luxury Real Estate', role: '', timeline: '', tagsString: '',
       liveUrl: 'https://webdot.agency',
       image: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=800&q=80',
       imageSource: 'screenshot',
@@ -529,8 +921,39 @@ export default function AdminCommandDashboard({
           </div>
         </div>
 
-        {/* METRICS ROW (4 Cards) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Navigation Tabs */}
+        <div className="flex flex-wrap gap-2.5 border-b border-white/5 pb-4">
+          <button
+            onClick={() => setActivePortalTab('operations')}
+            className={`px-5 py-3 rounded-xl font-bold text-xs font-mono transition-all uppercase tracking-wider flex items-center gap-2 ${
+              activePortalTab === 'operations' 
+                ? 'bg-primary-container text-on-primary-container shadow-lg shadow-primary-container/10 border border-primary/20' 
+                : 'bg-white/5 border border-white/5 text-on-surface-variant hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            Command Operations
+          </button>
+          <button
+            onClick={() => {
+              setActivePortalTab('quotations');
+              resetQuotationForm();
+            }}
+            className={`px-5 py-3 rounded-xl font-bold text-xs font-mono transition-all uppercase tracking-wider flex items-center gap-2 ${
+              activePortalTab === 'quotations' 
+                ? 'bg-primary-container text-on-primary-container shadow-lg shadow-primary-container/10 border border-primary/20' 
+                : 'bg-white/5 border border-white/5 text-on-surface-variant hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <FileText className="w-4 h-4 text-secondary" />
+            Quotation Document Portal
+          </button>
+        </div>
+
+        {activePortalTab === 'operations' ? (
+          <>
+            {/* METRICS ROW (4 Cards) */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           {stats.map((stat) => (
             <div key={stat.id} className="glass-card p-6 rounded-2xl flex justify-between items-center relative overflow-hidden group">
               <div className="space-y-2">
@@ -1179,6 +1602,81 @@ export default function AdminCommandDashboard({
               </div>
             </div>
 
+            {/* Project Categories Manager */}
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <h3 className="font-display text-lg font-bold text-on-surface flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary text-xl">category</span>
+                  Project Categories Manager
+                </h3>
+                <p className="text-xs text-on-surface-variant">Add, view, and purge categories used for filtering case-study catalogs dynamically.</p>
+              </div>
+
+              <div className="glass-card p-6 rounded-2xl bg-surface-container-low border border-white/5 space-y-4">
+                {/* Add Category Form */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="E.g. AI Logistics, Fintech"
+                    value={panelNewCategoryName}
+                    onChange={(e) => setPanelNewCategoryName(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        const trimmed = panelNewCategoryName.trim();
+                        if (trimmed && onAddCategory) {
+                          await onAddCategory(trimmed);
+                          setPanelNewCategoryName('');
+                        }
+                      }
+                    }}
+                    className="flex-1 bg-[#11131b] border border-white/10 rounded-xl px-4 py-2 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const trimmed = panelNewCategoryName.trim();
+                      if (trimmed && onAddCategory) {
+                        await onAddCategory(trimmed);
+                        setPanelNewCategoryName('');
+                      }
+                    }}
+                    className="bg-primary hover:brightness-110 text-background px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1"
+                  >
+                    Add
+                  </button>
+                </div>
+
+                {/* List of categories with delete buttons */}
+                <div className="flex flex-wrap gap-2 pt-1 max-h-[160px] overflow-y-auto custom-scrollbar">
+                  {categories.map((cat) => (
+                    <div
+                      key={cat}
+                      className="flex items-center gap-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl px-3 py-1 text-xs text-on-surface transition-all group/tag"
+                    >
+                      <span className="font-mono text-[11px] font-semibold text-on-surface-variant group-hover/tag:text-white transition-all">{cat}</span>
+                      {onDeleteCategory && (
+                        <button
+                          type="button"
+                          onClick={() => onDeleteCategory(cat)}
+                          className="text-on-surface-variant hover:text-red-400 p-0.5 rounded transition-all focus:outline-none cursor-pointer"
+                          title={`Delete category: ${cat}`}
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {categories.length === 0 && (
+                    <div className="text-xs text-on-surface-variant text-center w-full py-4 font-mono">
+                      No categories registered in the database.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
           </div>
 
         </div>
@@ -1238,7 +1736,628 @@ export default function AdminCommandDashboard({
           </div>
         </div>
 
+      </>
+    ) : (
+      <div className="space-y-8 animate-fadeIn">
+        {/* Header / Actions Row */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-surface-container-low p-6 rounded-2xl border border-white/5">
+          <div className="space-y-1">
+            <h2 className="font-display text-xl font-bold text-on-surface flex items-center gap-2">
+              <FileText className="w-5 h-5 text-primary" />
+              Client Quotations Engine
+            </h2>
+            <p className="text-xs text-on-surface-variant">
+              Generate customized, highly professional commercial proposals with integrated milestone structures and printable PDF outputs.
+            </p>
+          </div>
+          {!isEditingQuotation && (
+            <button
+              onClick={() => {
+                resetQuotationForm();
+                setIsEditingQuotation(true);
+              }}
+              className="flex items-center gap-2 bg-primary text-background hover:brightness-110 px-5 py-3 rounded-xl font-bold text-xs transition-all active:scale-95 shadow-lg shadow-primary/10 cursor-pointer"
+            >
+              <PlusCircle className="w-4 h-4" />
+              Create New Quotation
+            </button>
+          )}
+        </div>
+
+        {/* List state */}
+        {!isEditingQuotation ? (
+          <div className="space-y-6">
+            {/* Quotations Table */}
+            <div className="glass-card rounded-2xl border border-white/10 overflow-hidden">
+              <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.01]">
+                <div className="font-display font-semibold text-sm text-on-surface">Registered Quotation Records</div>
+                <span className="text-2xs font-mono text-primary bg-primary/10 px-2.5 py-1 rounded-lg border border-primary/20 font-bold uppercase">
+                  {quotations?.length || 0} Total Quotes
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-white/5 bg-white/[0.01] text-[10px] font-mono text-on-surface-variant font-bold uppercase tracking-wider">
+                      <th className="p-4 pl-6">Quote ID</th>
+                      <th className="p-4">Client & Company</th>
+                      <th className="p-4">Target Project</th>
+                      <th className="p-4">Val Until</th>
+                      <th className="p-4">Total Budget</th>
+                      <th className="p-4">Status</th>
+                      <th className="p-4 text-right pr-6">Operational Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5 text-xs">
+                    {!quotations || quotations.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="p-12 text-center text-on-surface-variant font-mono text-xs">
+                          <FileText className="w-10 h-10 text-on-surface-variant/40 mx-auto mb-3" />
+                          No commercial quotations registered. Click 'Create New Quotation' above to launch the builder wizard.
+                        </td>
+                      </tr>
+                    ) : (
+                      quotations.map((q) => (
+                        <tr key={q.id} className="hover:bg-white/[0.02] transition-colors">
+                          <td className="p-4 pl-6 font-mono font-semibold text-primary">{q.id}</td>
+                          <td className="p-4">
+                            <div className="font-semibold text-on-surface">{q.clientName}</div>
+                            <div className="text-[10px] text-on-surface-variant font-mono">{q.clientCompany || 'Independent'}</div>
+                          </td>
+                          <td className="p-4">
+                            <div className="font-semibold text-on-surface">{q.projectName}</div>
+                          </td>
+                          <td className="p-4 font-mono text-on-surface-variant">{q.validUntil}</td>
+                          <td className="p-4 font-mono font-bold text-secondary">${q.totalAmount.toLocaleString()}</td>
+                          <td className="p-4">
+                            <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase ${
+                              q.status === 'accepted' ? 'bg-primary/25 text-primary border border-primary/20' :
+                              q.status === 'sent' ? 'bg-secondary/25 text-secondary border border-secondary/20 font-semibold' :
+                              q.status === 'expired' ? 'bg-red-500/20 text-red-400 border border-red-500/20' :
+                              'bg-white/5 text-on-surface-variant border border-white/5'
+                            }`}>
+                              {q.status}
+                            </span>
+                          </td>
+                          <td className="p-4 text-right pr-6">
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadQuotationPDF(q)}
+                                className="p-2 rounded-xl bg-primary/10 border border-primary/10 text-primary hover:bg-primary/20 hover:text-white transition-all cursor-pointer"
+                                title="Download PDF Document"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleLoadQuotationForEdit(q)}
+                                className="p-2 rounded-xl bg-white/5 border border-white/5 text-on-surface-variant hover:bg-white/15 hover:text-white transition-all cursor-pointer"
+                                title="Edit Quotation"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                              {onDeleteQuotation && (
+                                <button
+                                  type="button"
+                                  onClick={() => onDeleteQuotation(q.id)}
+                                  className="p-2 rounded-xl bg-red-500/5 border border-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition-all cursor-pointer"
+                                  title="Delete Record"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Builder Wizard */
+          <form onSubmit={handleFormSubmitQuotation} className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            
+            {/* Left Form (lg:col-span-7) */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="glass-card p-6 md:p-8 rounded-3xl border border-white/10 space-y-6 bg-surface-container-low">
+                
+                <div className="flex justify-between items-center border-b border-white/5 pb-4">
+                  <div className="font-display font-bold text-lg text-on-surface">
+                    {editingQuotationId ? `Edit Quotation Details (${editingQuotationId})` : 'New Quotation Builder Wizard'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetQuotationForm}
+                    className="text-on-surface-variant hover:text-white p-2 rounded-xl hover:bg-white/5 transition-all"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Meta info block */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Client Contact Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={quoteClientName}
+                      onChange={(e) => setQuoteClientName(e.target.value)}
+                      placeholder="E.g. Jennifer Lawrence"
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Client Company Name</label>
+                    <input
+                      type="text"
+                      value={quoteClientCompany}
+                      onChange={(e) => setQuoteClientCompany(e.target.value)}
+                      placeholder="E.g. Zenith Realty Corp"
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Client Email Address</label>
+                    <input
+                      type="email"
+                      value={quoteClientEmail}
+                      onChange={(e) => setQuoteClientEmail(e.target.value)}
+                      placeholder="E.g. jennifer@zenithrealty.com"
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Quotation Document Status</label>
+                    <select
+                      value={quoteStatus}
+                      onChange={(e: any) => setQuoteStatus(e.target.value)}
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    >
+                      <option value="draft">Draft (Private)</option>
+                      <option value="sent">Sent to Client</option>
+                      <option value="accepted">Accepted / Approved</option>
+                      <option value="expired">Expired</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Target Project Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={quoteProjectName}
+                    onChange={(e) => setQuoteProjectName(e.target.value)}
+                    placeholder="E.g. Next-Gen Immersive Real Estate Platform"
+                    className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Issue Date</label>
+                    <input
+                      type="date"
+                      required
+                      value={quoteDate}
+                      onChange={(e) => setQuoteDate(e.target.value)}
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Offer Validity Expiry</label>
+                    <input
+                      type="date"
+                      required
+                      value={quoteValidUntil}
+                      onChange={(e) => setQuoteValidUntil(e.target.value)}
+                      className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                    />
+                  </div>
+                </div>
+
+                {/* Items list */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex justify-between items-center">
+                    <div className="text-xs font-mono text-on-surface font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-primary" />
+                      Project Scope Deliverables & Budget Breakdowns
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setQuoteItems(prev => [...prev, { description: 'New project scope deliverable description...', amount: 1500 }])}
+                      className="text-2xs font-mono font-bold text-primary hover:underline flex items-center gap-1 bg-primary/10 border border-primary/20 px-2 py-1 rounded cursor-pointer"
+                    >
+                      + Add Item
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {quoteItems.map((item, index) => (
+                      <div key={index} className="flex gap-2.5 items-center bg-[#050811]/50 p-3 rounded-xl border border-white/5 animate-fadeIn">
+                        <input
+                          type="text"
+                          required
+                          value={item.description}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuoteItems(prev => {
+                              const c = [...prev];
+                              c[index].description = val;
+                              return c;
+                            });
+                          }}
+                          placeholder="Deliverable details"
+                          className="flex-1 bg-[#050811] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-on-surface focus:border-primary focus:outline-none transition-all"
+                        />
+                        <div className="flex items-center gap-1 bg-[#050811] border border-white/10 rounded-xl px-3 py-2 w-32 shrink-0">
+                          <span className="text-xs text-on-surface-variant font-mono">$</span>
+                          <input
+                            type="number"
+                            required
+                            min={0}
+                            value={item.amount}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value) || 0;
+                              setQuoteItems(prev => {
+                                const c = [...prev];
+                                c[index].amount = val;
+                                return c;
+                              });
+                            }}
+                            className="w-full bg-transparent border-none outline-none text-xs text-on-surface font-mono p-0 focus:ring-0"
+                          />
+                        </div>
+                        {quoteItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setQuoteItems(prev => prev.filter((_, i) => i !== index))}
+                            className="p-2 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-transparent transition-all shrink-0 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Payment Schedule Milestones */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex justify-between items-center">
+                    <div className="text-xs font-mono text-on-surface font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <DollarSign className="w-4 h-4 text-secondary" />
+                      Milestone Payment Schedule
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setQuoteMilestones(prev => [...prev, { label: 'New Milestone Delivery', percentage: 20, amount: 0, description: 'Due upon completion of this technical phase.' }])}
+                      className="text-2xs font-mono font-bold text-secondary hover:underline flex items-center gap-1 bg-secondary/10 border border-secondary/20 px-2 py-1 rounded cursor-pointer"
+                    >
+                      + Add Milestone
+                    </button>
+                  </div>
+
+                  {/* Percent total indicator */}
+                  {(() => {
+                    const sumPct = quoteMilestones.reduce((s, m) => s + (Number(m.percentage) || 0), 0);
+                    return (
+                      <div className={`p-3 rounded-xl text-xs font-mono font-bold flex items-center justify-between border ${
+                        sumPct === 100 
+                          ? 'bg-primary/5 border-primary/20 text-primary' 
+                          : 'bg-red-500/5 border-red-500/20 text-red-400'
+                      }`}>
+                        <span className="flex items-center gap-1">
+                          <Percent className="w-4 h-4" />
+                          Milestone Percentages Distribution Balance
+                        </span>
+                        <span>{sumPct}% / 100%</span>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="space-y-4">
+                    {quoteMilestones.map((m, index) => (
+                      <div key={index} className="bg-[#050811]/40 p-4 rounded-xl border border-white/5 space-y-3 animate-fadeIn">
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="text"
+                            required
+                            value={m.label}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuoteMilestones(prev => {
+                                const c = [...prev];
+                                c[index].label = val;
+                                return c;
+                              });
+                            }}
+                            placeholder="Milestone Phase Name (e.g. Commencement Retainer)"
+                            className="flex-1 bg-[#050811] border border-white/10 rounded-xl px-3.5 py-1.5 text-xs text-on-surface font-semibold focus:border-primary focus:outline-none transition-all"
+                          />
+                          <div className="flex items-center gap-1 bg-[#050811] border border-white/10 rounded-xl px-3 py-1.5 w-24 shrink-0">
+                            <input
+                              type="number"
+                              required
+                              min={1}
+                              max={100}
+                              value={m.percentage}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value) || 0;
+                                setQuoteMilestones(prev => {
+                                  const c = [...prev];
+                                  c[index].percentage = val;
+                                  return c;
+                                });
+                              }}
+                              className="w-full bg-transparent border-none outline-none text-xs text-on-surface font-mono text-right p-0 focus:ring-0"
+                            />
+                            <span className="text-xs text-on-surface-variant font-mono">%</span>
+                          </div>
+                          <span className="text-xs font-mono font-bold text-secondary w-20 text-right shrink-0">
+                            ${m.amount.toLocaleString()}
+                          </span>
+                          {quoteMilestones.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setQuoteMilestones(prev => prev.filter((_, i) => i !== index))}
+                              className="p-1.5 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-transparent transition-all shrink-0 cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          required
+                          value={m.description}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuoteMilestones(prev => {
+                              const c = [...prev];
+                              c[index].description = val;
+                              return c;
+                            });
+                          }}
+                          placeholder="Describe structural criteria (e.g., clearance of retainer before kick-off)"
+                          className="w-full bg-[#050811]/80 border border-white/5 rounded-lg px-3 py-1 text-xs text-on-surface-variant focus:outline-none"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Agency Terms & Conditions */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex justify-between items-center">
+                    <div className="text-xs font-mono text-on-surface font-bold uppercase tracking-wider flex items-center gap-1.5">
+                      <CheckCircle className="w-4 h-4 text-primary" />
+                      Commercial Terms & Conditions
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setQuoteTerms(prev => [...prev, 'All commercial adjustments inside active cycles must be documented and signed in writing.'])}
+                      className="text-2xs font-mono font-bold text-primary hover:underline flex items-center gap-1 bg-primary/10 border border-primary/20 px-2 py-1 rounded cursor-pointer"
+                    >
+                      + Add Term
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {quoteTerms.map((term, index) => (
+                      <div key={index} className="flex gap-2.5 items-center bg-[#050811]/30 p-2.5 rounded-xl border border-white/5 animate-fadeIn">
+                        <span className="text-xs font-mono text-primary font-bold">{index + 1}.</span>
+                        <input
+                          type="text"
+                          required
+                          value={term}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuoteTerms(prev => {
+                              const c = [...prev];
+                              c[index] = val;
+                              return c;
+                            });
+                          }}
+                          placeholder="Enter legal/operational condition"
+                          className="flex-1 bg-[#050811] border border-white/10 rounded-xl px-3.5 py-1.5 text-xs text-on-surface-variant focus:border-primary focus:outline-none transition-all"
+                        />
+                        {quoteTerms.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setQuoteTerms(prev => prev.filter((_, i) => i !== index))}
+                            className="p-1.5 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-transparent transition-all shrink-0 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Extra Notes */}
+                <div className="space-y-1 pt-4 border-t border-white/5">
+                  <label className="text-2xs font-mono text-on-surface-variant uppercase tracking-wider font-bold">Additional Project Context Notes (Private or Public Contract Notes)</label>
+                  <textarea
+                    rows={3}
+                    value={quoteNotes}
+                    onChange={(e) => setQuoteNotes(e.target.value)}
+                    placeholder="E.g., Any specialized server configurations, SLA warranty notes, custom integration credits..."
+                    className="w-full bg-[#050811] border border-white/10 rounded-xl px-4 py-2.5 text-xs text-on-surface resize-none focus:outline-none focus:border-primary"
+                  />
+                </div>
+
+                {/* Submit Actions */}
+                <div className="flex gap-4 pt-4 border-t border-white/5">
+                  <button
+                    type="button"
+                    onClick={resetQuotationForm}
+                    className="flex-1 bg-white/5 border border-white/10 text-on-surface font-bold py-3.5 rounded-xl text-xs hover:bg-white/10 transition-all cursor-pointer"
+                  >
+                    Cancel & Discard
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 bg-primary text-background font-bold py-3.5 rounded-xl text-xs hover:brightness-110 transition-all cursor-pointer shadow-lg shadow-primary/15"
+                  >
+                    {editingQuotationId ? 'Save & Update Quotation' : 'Finalize & Store Quotation'}
+                  </button>
+                </div>
+
+              </div>
+            </div>
+
+            {/* Right Interactive Live-Preview (lg:col-span-5) */}
+            <div className="lg:col-span-5 space-y-6 lg:sticky lg:top-24">
+              <div className="glass-card p-6 rounded-3xl border border-white/10 bg-white text-slate-800 space-y-6 shadow-2xl overflow-hidden relative">
+                
+                {/* Live Watermark Badge */}
+                <div className="absolute top-0 right-0 bg-secondary px-3 py-1 text-[8px] font-mono font-bold text-background uppercase tracking-widest rounded-bl-xl shadow flex items-center gap-1">
+                  <Sparkle className="w-2.5 h-2.5 animate-spin-slow" /> LIVE PREVIEW MATCHING PDF
+                </div>
+
+                {/* PDF Header Mock */}
+                <div className="flex justify-between items-start border-b-2 border-slate-900 pb-4 pt-2">
+                  <div>
+                    <div className="bg-slate-900 text-white font-extrabold text-xs px-3 py-1 tracking-wider inline-block rounded mb-1">
+                      WEBDOT
+                    </div>
+                    <div className="text-[8px] text-slate-400 uppercase font-bold tracking-wider">CREATIVE TECH AGENCY</div>
+                  </div>
+                  <div className="text-right text-[8px] text-slate-500 space-y-0.5">
+                    <div className="font-bold text-slate-800">WEBDOT CREATIVE AGENCY</div>
+                    <div>hello@webdot.agency</div>
+                    <div>https://webdot.agency</div>
+                  </div>
+                </div>
+
+                {/* Quotation title */}
+                <div className="space-y-1">
+                  <div className="text-sm font-black text-slate-900 tracking-tight">PROJECT COMMERCIAL QUOTATION</div>
+                  <div className="w-12 h-0.5 bg-blue-500"></div>
+                </div>
+
+                {/* Metadata Grid */}
+                <div className="grid grid-cols-2 gap-3 text-[9px] bg-slate-50 p-3 rounded-lg border border-slate-100">
+                  <div className="space-y-1">
+                    <div className="font-bold text-slate-900 text-[8px] tracking-wide uppercase">QUOTATION DETAILS</div>
+                    <div className="text-slate-600 font-mono">ID: {editingQuotationId || 'QT-[MOCK_ID]'}</div>
+                    <div className="text-slate-600">Issued: {quoteDate}</div>
+                    <div className="text-slate-600">Valid: {quoteValidUntil}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="font-bold text-slate-900 text-[8px] tracking-wide uppercase">PREPARED FOR CLIENT</div>
+                    <div className="text-slate-800 font-semibold">{quoteClientName || 'Client Name'}</div>
+                    <div className="text-slate-600">{quoteClientCompany || 'Company'}</div>
+                    <div className="text-slate-500 font-mono text-[8px]">{quoteClientEmail || 'client@email.com'}</div>
+                  </div>
+                </div>
+
+                {/* Target project name */}
+                <div className="text-[10px] text-slate-900 font-bold leading-snug">
+                  Target: <span className="text-blue-600 underline decoration-blue-200">{quoteProjectName || 'Project Target Scope Name'}</span>
+                </div>
+
+                {/* Table scope */}
+                <div className="space-y-2">
+                  <div className="bg-slate-900 text-white text-[8px] font-bold p-1.5 rounded flex justify-between tracking-wide">
+                    <span>SCOPE DESCRIPTION</span>
+                    <span className="pr-2">ESTIMATED COST (USD)</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 text-[9px]">
+                    {quoteItems.map((item, idx) => (
+                      <div key={idx} className="py-2 flex justify-between items-center text-slate-700">
+                        <span className="line-clamp-1 pr-4">{item.description}</span>
+                        <span className="font-mono font-semibold text-slate-900">${(Number(item.amount) || 0).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border-t border-slate-300 pt-2 flex justify-between items-center">
+                    <span className="font-bold text-slate-900 text-[10px]">TOTAL BUDGET</span>
+                    <span className="font-mono font-bold text-blue-600 text-[11px]">${totalQuoteAmount.toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {/* Milestones Schedule Mock */}
+                <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                  <div className="font-bold text-slate-900 text-[9px] tracking-wide uppercase">PAYMENT MILESTONES & SCHEDULE</div>
+                  <div className="space-y-2 text-[8px]">
+                    {quoteMilestones.map((milestone, idx) => {
+                      const calculatedAmt = Math.round((totalQuoteAmount * (Number(milestone.percentage) || 0)) / 100);
+                      return (
+                        <div key={idx} className="bg-slate-50 p-2 rounded border border-slate-100 space-y-0.5">
+                          <div className="flex justify-between items-center text-slate-900 font-bold">
+                            <span>{milestone.label || `Milestone Phase ${idx + 1}`} ({milestone.percentage}%)</span>
+                            <span className="font-mono text-blue-600 text-[9px]">${calculatedAmt.toLocaleString()}</span>
+                          </div>
+                          <p className="text-slate-500 leading-normal text-[7.5px] italic">{milestone.description || 'Milestone clearance conditions details...'}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Terms T&C Mock */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <div className="font-bold text-slate-900 text-[9px] tracking-wide uppercase">COMMERCIAL TERMS & CONDITIONS</div>
+                  <div className="space-y-1 text-[7.5px] text-slate-500 leading-normal font-sans">
+                    {quoteTerms.map((term, idx) => (
+                      <div key={idx} className="flex gap-1.5">
+                        <span className="font-bold text-slate-700">{idx + 1}.</span>
+                        <p>{term}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Download trigger */}
+                <div className="pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tempQuote: Quotation = {
+                        id: editingQuotationId || 'QT-MOCK',
+                        clientName: quoteClientName || 'Jane Doe',
+                        clientCompany: quoteClientCompany || 'Zenith Corp',
+                        clientEmail: quoteClientEmail || 'jane@zenith.com',
+                        projectName: quoteProjectName || 'Modern Web Application Platform',
+                        date: quoteDate,
+                        validUntil: quoteValidUntil,
+                        items: quoteItems,
+                        paymentMilestones: quoteMilestones.map(m => ({
+                          ...m,
+                          amount: Math.round((totalQuoteAmount * (Number(m.percentage) || 0)) / 100)
+                        })),
+                        terms: quoteTerms,
+                        totalAmount: totalQuoteAmount,
+                        notes: quoteNotes,
+                        status: quoteStatus
+                      };
+                      handleDownloadQuotationPDF(tempQuote);
+                    }}
+                    className="w-full bg-slate-900 hover:bg-blue-600 text-white font-bold py-2.5 rounded-xl text-[10px] flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Instant Download Draft PDF</span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+
+          </form>
+        )}
       </div>
+    )}
+
+  </div>
 
       {/* CREATE / ADD CATALOG MODAL */}
       <AnimatePresence>
@@ -1303,16 +2422,50 @@ export default function AdminCommandDashboard({
                   <div className="space-y-1">
                     <label className="text-xs text-on-surface-variant">Industry Vertical</label>
                     <select 
-                      value={newProject.industry}
-                      onChange={(e) => setNewProject({...newProject, industry: e.target.value})}
+                      value={showAdminNewCategoryInput ? "__new__" : newProject.industry}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === "__new__") {
+                          setShowAdminNewCategoryInput(true);
+                        } else {
+                          setShowAdminNewCategoryInput(false);
+                          setNewProject({...newProject, industry: val});
+                        }
+                      }}
                       className="w-full bg-surface-container-high border border-white/10 rounded-xl px-4 py-2 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
                     >
-                      <option value="Luxury Real Estate">Luxury Real Estate</option>
-                      <option value="Healthcare Tech">Healthcare Tech</option>
-                      <option value="Luxury Retail">Luxury Retail</option>
-                      <option value="AI Logistics">AI Logistics</option>
-                      <option value="Travel & Leisure">Travel & Leisure</option>
+                      {categories.map((cat) => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                      <option value="__new__">+ Add New Category...</option>
                     </select>
+
+                    {showAdminNewCategoryInput && (
+                      <div className="mt-2 flex gap-2">
+                        <input 
+                          type="text"
+                          placeholder="Category name"
+                          value={adminNewCategoryName}
+                          onChange={(e) => setAdminNewCategoryName(e.target.value)}
+                          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const trimmed = adminNewCategoryName.trim();
+                            if (trimmed && onAddCategory) {
+                              await onAddCategory(trimmed);
+                              setNewProject(prev => ({ ...prev, industry: trimmed }));
+                              setShowAdminNewCategoryInput(false);
+                              setAdminNewCategoryName('');
+                            }
+                          }}
+                          className="bg-primary hover:brightness-110 text-on-primary px-3 py-1 rounded-xl text-[10px] font-bold transition-all"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs text-on-surface-variant">Studio Role</label>

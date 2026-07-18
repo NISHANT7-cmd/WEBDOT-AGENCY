@@ -28,5 +28,14 @@ service cloud.firestore {
     match /metrics/{metric} {
       allow read, write: if true;
     }
+
+    match /categories/{category} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /quotations/{quotation} {
+      allow read, write: if isAdmin();
+    }
   }
 }

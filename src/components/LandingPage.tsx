@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowUpRight, Check, Briefcase, Layers, Send, Star, User, Sparkles, AlertCircle, Quote, Phone, MessageSquare, Mail } from 'lucide-react';
 // @ts-ignore
-import webdotLogo from '../assets/images/web.png';
+import webdotLogo from '../assets/images/web.jpg';
 import { Project, Testimonial, Inquiry } from '../types';
 import { resolveProjectImage } from '../utils/imageResolver';
 
@@ -13,6 +13,8 @@ interface LandingPageProps {
   onSubmitInquiry: (inquiry: Omit<Inquiry, 'id' | 'date'>) => void;
   onSubmitTestimonial: (testimonial: Omit<Testimonial, 'id' | 'status' | 'initials'>) => void;
   onSubmitProject: (project: Omit<Project, 'id' | 'status' | 'lastUpdated'>) => void;
+  categories?: string[];
+  onAddCategory?: (category: string) => Promise<void>;
 }
 
 export default function LandingPage({
@@ -21,7 +23,9 @@ export default function LandingPage({
   onSelectProject,
   onSubmitInquiry,
   onSubmitTestimonial,
-  onSubmitProject
+  onSubmitProject,
+  categories = [],
+  onAddCategory
 }: LandingPageProps) {
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [activeTab, setActiveTab] = useState<'review' | 'project'>('review');
@@ -33,7 +37,7 @@ export default function LandingPage({
     name: '',
     client: '',
     description: '',
-    industry: 'Healthcare Tech',
+    industry: categories[0] || 'Healthcare Tech',
     role: 'UX/UI Design & Development',
     timeline: '3 Months',
     tagsString: '',
@@ -46,12 +50,21 @@ export default function LandingPage({
     metricLabel: 'User engagement speed improvement'
   });
   
+  const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+
+  React.useEffect(() => {
+    if (categories.length > 0 && (!projectForm.industry || projectForm.industry === 'Healthcare Tech' && !categories.includes('Healthcare Tech'))) {
+      setProjectForm(prev => ({ ...prev, industry: categories[0] }));
+    }
+  }, [categories]);
+  
   const [inquirySuccess, setInquirySuccess] = useState(false);
   const [testimonialSuccess, setTestimonialSuccess] = useState(false);
   const [projectSuccess, setProjectSuccess] = useState(false);
 
   // Available unique industry tags + All
-  const tags = ['All', 'Luxury Real Estate', 'Healthcare Tech', 'Luxury Retail', 'AI Logistics', 'Travel & Leisure'];
+  const tags = ['All', ...categories];
 
   const filteredProjects = selectedTag === 'All'
     ? projects.filter(p => p.status === 'published')
@@ -506,16 +519,50 @@ export default function LandingPage({
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase font-mono tracking-wider text-on-surface-variant font-semibold">Industry Vertical</label>
                       <select
-                        value={projectForm.industry}
-                        onChange={(e) => setProjectForm({...projectForm, industry: e.target.value})}
+                        value={showNewCategoryInput ? "__new__" : projectForm.industry}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === "__new__") {
+                            setShowNewCategoryInput(true);
+                          } else {
+                            setShowNewCategoryInput(false);
+                            setProjectForm({...projectForm, industry: val});
+                          }
+                        }}
                         className="w-full bg-[#11131b] border border-white/10 rounded-xl px-3 py-2 sm:py-2.5 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
                       >
-                        <option value="Luxury Real Estate">Luxury Real Estate</option>
-                        <option value="Healthcare Tech">Healthcare Tech</option>
-                        <option value="Luxury Retail">Luxury Retail</option>
-                        <option value="AI Logistics">AI Logistics</option>
-                        <option value="Travel & Leisure">Travel & Leisure</option>
+                        {categories.map((cat) => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                        <option value="__new__">+ Add New Category...</option>
                       </select>
+
+                      {showNewCategoryInput && (
+                        <div className="mt-2 flex gap-2">
+                          <input 
+                            type="text"
+                            placeholder="New category name"
+                            value={newCategoryName}
+                            onChange={(e) => setNewCategoryName(e.target.value)}
+                            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
+                          />
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const trimmed = newCategoryName.trim();
+                              if (trimmed && onAddCategory) {
+                                await onAddCategory(trimmed);
+                                setProjectForm(prev => ({ ...prev, industry: trimmed }));
+                                setShowNewCategoryInput(false);
+                                setNewCategoryName('');
+                              }
+                            }}
+                            className="bg-primary hover:brightness-110 text-on-primary px-3 py-1.5 rounded-xl text-[10px] font-bold transition-all"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase font-mono tracking-wider text-on-surface-variant font-semibold">Project Timeline</label>
